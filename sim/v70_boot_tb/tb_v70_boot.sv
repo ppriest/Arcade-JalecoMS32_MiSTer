@@ -190,6 +190,25 @@ end
 // ---------------------------------------------------------------- decode monitor
 // First decodes: what the window held when the core looked at it. Diagnostic
 // for a boot that halts or wanders; costs nothing when it does not.
+// ---------------------------------------------------------------- CPI
+// Instructions retired = S_DECODE entries (every instruction passes through
+// it once; an exception adds one). Bus-busy = cycles with a physical request
+// outstanding, whoever owns it. This is the Phase 0 criterion-3 number.
+longint cpi_cycles = 0, cpi_instr = 0, cpi_busbusy = 0, cpi_pfwait = 0;
+// FP-group census: does this game execute 0x5C/0x5F at all? Decides whether
+// the FP tail (the core's Fmax-limiting path) has to be carried.
+longint cpi_fp = 0;
+reg st_dec_d = 0;
+always @(posedge clk) if (!rst) begin
+    cpi_cycles <= cpi_cycles + 1;
+    st_dec_d   <= (cpu.st == 3);
+    if (cpu.st == 3 && !st_dec_d) begin
+        cpi_instr <= cpi_instr + 1;
+        if (cpu.fb[0] == 8'h5c || cpu.fb[0] == 8'h5f) cpi_fp <= cpi_fp + 1;
+    end
+    if (m_req) cpi_busbusy <= cpi_busbusy + 1;
+    if (cpu.st == 1 /* S_FILL */) cpi_pfwait <= cpi_pfwait + 1;
+end
 integer ncyc = 0;
 always @(posedge clk) if (!rst && ncyc < 60) begin
     ncyc = ncyc + 1;
@@ -255,6 +274,11 @@ initial begin
     $fdisplay(flog, "# %0d accesses, %0d I/O replay misses, PC=%08x", n_acc, rp_miss, cpu.pc);
     $fclose(flog);
     $display("V70 BOOT: %0d accesses logged to %s, %0d I/O replay misses, PC=%08x", n_acc, outpath, rp_miss, cpu.pc);
+    $display("V70 CPI: %0d instructions in %0d cycles = %0d.%02d cycles/instr; bus busy %0d cycles (%0d%%), in S_FILL %0d cycles (%0d%%); FP-group instructions %0d",
+             cpi_instr, cpi_cycles, cpi_cycles / (cpi_instr ? cpi_instr : 1),
+             (100 * cpi_cycles / (cpi_instr ? cpi_instr : 1)) % 100,
+             cpi_busbusy, 100 * cpi_busbusy / (cpi_cycles ? cpi_cycles : 1),
+             cpi_pfwait, 100 * cpi_pfwait / (cpi_cycles ? cpi_cycles : 1), cpi_fp);
     $finish;
 end
 
