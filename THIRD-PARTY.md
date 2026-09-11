@@ -85,6 +85,15 @@ documents it. That applies to *function*. It does not extend to *structure*: whe
 decomposition choice that alternatives existed for, mirroring that choice is a different question
 from reproducing what the chip does.
 
+### zakk4223/Arcade-SeibuSPI_MiSTer — GPL-3 (confirmed by the author; LICENSE file pending)
+
+<https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer> — `rtl/ymf271.sv`, `rtl/ymf271_synth.sv`,
+`rtl/ymf271_tables.vh`, the YMF271 (OPX) sound chip, a port of MAME's OPX rewrite. **Not yet
+vendored.** The repository carried no LICENSE and the files no header when found; the author
+confirmed GPL-3 on 2026-09-11 (relayed by this project's owner) and said a LICENSE would follow.
+Vendor only once that file is committed upstream, and record the commit in
+`rtl/sound/ymf271/PROVENANCE.md` when it happens.
+
 ### ymfm — BSD-3-Clause
 
 <https://github.com/aaronsgiles/ymfm> — the YMF271 behaviour reference for the from-scratch sound

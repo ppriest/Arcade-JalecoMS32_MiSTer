@@ -10,7 +10,7 @@
 --
 -- Ported from the Seta core's scripts/mame/boottrace.lua. What changed for a
 -- V70: the tap covers the full 32-bit address space and logs 32 bits of data,
--- because the V70 is a 32-bit machine whose ROM sits at 0xFFC00000 and whose
+-- because the V70 is a 32-bit machine whose ROM sits at 0xFFE00000 and whose
 -- RAMs are mirrored across 0xC0000000-0xFFFFFFFF (ms32.cpp's map). The
 -- Seta version masked to 24 bits and 16 bits, which would have silently
 -- folded every MS32 address onto the wrong one.

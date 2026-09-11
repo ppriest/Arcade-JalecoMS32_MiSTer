@@ -265,7 +265,7 @@ TLB, and 295 distinct `op*` handler names across the primary and extended tables
    new 32-bit adapter. The CPU-side port is already `c_addr[31:0]`, so this is one module rewritten,
    not the core.
 2. **The fast instruction-fetch port is 24-bit.** `v60_ifetch.sv` does
-   `assign if_addr = pf_addr[23:0]`. MS32's program ROM is at `0xFFC00000`, so this widens to 32.
+   `assign if_addr = pf_addr[23:0]`. MS32's program ROM is at `0xFFE00000`, so this widens to 32.
    Checked: every other `24'` in `v60.sv` is `{24'b0, byte}` zero-extension, not address truncation.
 3. **`IS_V70` otherwise only selects PIR** (`0x00007000` vs `0x00006000`) — which is exactly what
    distinguishes the two in MAME, where `v70_device` is `v60_device` with databits 16→32,
@@ -322,9 +322,9 @@ wavetable/PCM engine reading a multi-megabyte sample ROM through the SDRAM arbit
 `ymfm` as the behaviour reference, with its sample cache, envelope pipeline and SDRAM client
 structure all directly relevant. `ymfm`'s `ymf271` model and MAME's `ymf271.cpp` are the spec.
 
-This is Phase 3 work. Whether it is from scratch depends on a licence: a YMF271 exists in the
-Seibu SPI MiSTer core and is unlicensed — see "Open items". If a grant is obtained, Phase 3 becomes
-a port; if not, it is the largest from-scratch block in the project.
+This is Phase 3 work, and it is **a port, not a from-scratch block**: the YMF271 in the Seibu SPI
+MiSTer core is GPL-3 by its author's confirmation (see "Open items"), pending the LICENSE file
+landing upstream. Psikyo's OPL4 remains the in-house reference for the SDRAM sample-cache shape.
 
 ## The mixer
 
@@ -653,11 +653,12 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
   Z80 interface is the same sixteen-byte window MS32 uses at `0x3f00`. **The repository has no
   LICENSE file and those files carry no licence header** — only its third-party files (rmonic79's
   CRT modules, Sorgelig's `sdram.sv`, Martin Donlon's savestate RAM) are licensed. Unlicensed means
-  all rights reserved: it cannot be vendored without the author's grant. Phase 3's first step is to
-  ask zakk4223 for a GPL-3-compatible licence on the two files; from scratch is the fallback, not
-  the plan. Either way the port carries SPI-specific dependencies to strip (`system_consts`, the
-  `ssbus_if` savestate interfaces, a 57.27 MHz `CLK_HZ` constant) and its ALM cost is not separated
-  in that project's figures.
+  all rights reserved: it could not be vendored without the author's grant. **Asked and answered
+  the same day: zakk4223 confirmed the file is GPL-3 and will add a LICENSE to the repository**
+  (relayed by the project owner, 2026-09-11). Vendor it once that LICENSE is committed upstream, so
+  the provenance points at a licensed commit rather than a message. The port carries SPI-specific
+  dependencies to strip (`system_consts`, the `ssbus_if` savestate interfaces, a 57.27 MHz `CLK_HZ`
+  constant) and its ALM cost is not separated in that project's figures.
 - **Sprite frame buffer placement** — DDR3 or SDRAM's remainder. Decide by measurement in Phase 1.
 - **Whether the sprite engine can finish a frame.** 4096 slots, each up to 256×256 zoomed, against
   1,615,872 `clk_sys` cycles per frame at 96 MHz (263 lines x 6,144). Instrument from the first
