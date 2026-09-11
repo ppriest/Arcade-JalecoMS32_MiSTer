@@ -275,6 +275,17 @@ Get-Process vsim,vsimk | Select-Object Id,ProcessName,CPU,WorkingSet64,StartTime
 
 `taskkill //PID <n> //F` fails against these; `Stop-Process -Force` succeeds.
 
+**Verilator is the second simulator, and the fast one.** MSYS2's mingw64 package
+(`pacman -S mingw-w64-x86_64-verilator`, 5.050 as installed on 2026-09-12), driven through the msys
+bash so its `make` and `g++` resolve. It is what both upstreams regression the vendored V60/V70
+core with, and it turns the boot-trace diff's 15–20 minute ModelSim iteration into a build of ~10 s
+plus a run measured in tens of seconds (`scripts/run_v60_verilator.sh` for the unit suite; the boot
+bench builds with the same flags). Two things it is not: it is two-state, so anything that turns on
+X-propagation stays on ModelSim; and seven of the core's benches poke its enum FSM state in a way
+Verilator will not elaborate, so the ModelSim runner keeps covering those. A disagreement between
+the two simulators is a finding, not a nuisance — the `always @*` time-zero entry in LESSONS_LEARNED
+is one.
+
 The rest of testbench discipline is in LESSONS_LEARNED's "Testbench discipline" section — read it
 before writing a new bench rather than after one gives a confident wrong answer.
 
@@ -335,6 +346,16 @@ superset. Instruction-fetch *order* is not compared, because MAME re-reads instr
 every access and never reads ahead while this core prefetches 8-20 bytes and shifts — two correct
 cores fetch the same words in different orders. A read of an unmapped address the RTL makes and
 MAME does not is the prefetcher looking past the end of ROM, not a fault.
+
+Interrupts are replayed by **position**, not time. The bench clock is not the board's and the
+core's CPI is not MAME's, so "raise vblank every 16.8 ms" would land on different instructions and
+the traces would diverge at the second frame no matter how correct the core was. Instead
+`compare_boot_trace.py irqs` finds every interrupt MAME took — a vector-table read at
+`SBR + 4*(0x40+level)` — and names the last write the interrupted program made before it (address,
+data, and how many times that exact write had occurred; MAME's `v60_do_irq` pushes PSW and PC
+first, so those two are skipped). The bench asserts the level after its own N-th such write and
+holds it until the core's `irq_ack`. The core then takes it at its next instruction boundary,
+which is where MAME did.
 
 I/O reads are not modelled in the bench. They are replayed: every read MAME made of an address
 that is neither ROM nor RAM is answered with MAME's own recorded value, in MAME's order. That is

@@ -3,7 +3,7 @@
 """Diff the V70 core's boot against MAME's, access by access.
 
     python scripts/compare_boot_trace.py replay  tetrisp   # -> <set>_io_replay.txt for the bench
-    python scripts/compare_boot_trace.py compare tetrisp   # MAME trace vs RTL trace
+    python scripts/compare_boot_trace.py compare tetrisp [rtl_trace_name]   # MAME trace vs RTL trace
 
 Both traces are "seq rw addr mask data" lines from a tap on the bus:
 MAME's from scripts/mame_boot_trace.py, the RTL's from sim/v70_boot_tb.
@@ -91,7 +91,7 @@ def compare(game):
     """
     d = REPO / "debug" / f"{game}-boot"
     mame = collapse(load(d / f"{game}_boot.trace"))
-    rtl = collapse(load(d / "rtl_boot.trace"))
+    rtl = collapse(load(d / (sys.argv[3] if len(sys.argv) > 3 else "rtl_boot.trace")))
     print(f"MAME {len(mame)} collapsed accesses, RTL {len(rtl)}")
 
     # I/O addresses MAME actually read. An RTL read of an "io" address that MAME
@@ -152,6 +152,71 @@ def compare(game):
     return 1 if bad else 0
 
 
+SBR = 0xFFE00000   # tetrisp's vector table; V60 vector = level + 0x40, entry at SBR + 4*vector
+
+
+def irqs(game):
+    """Every interrupt MAME took, as a trigger the bench can replay.
+
+    An interrupt entry shows up in the trace as a read of the vector table at
+    SBR + 4*(0x40+level). The bench cannot reproduce MAME's timing (frame
+    counters, a 20 MHz CPU against a 100 MHz bench clock), but it can
+    reproduce the POSITION: the last write MAME made before the vector fetch,
+    identified by address, data and how many times that exact write had
+    occurred. The bench asserts the level after its own N-th occurrence of
+    that write, and the core takes it at the next instruction boundary, as
+    MAME did.
+    """
+    mame = load(REPO / "debug" / f"{game}-boot" / f"{game}_boot.trace")
+    out = REPO / "debug" / f"{game}-boot" / f"{game}_irqs.txt"
+    seen = {}       # (addr, data) -> occurrences so far, writes only
+    recent = []     # (addr, data, occurrence, data reads before it) of the last three writes
+    nrd = 0         # data (non-ROM) reads since the last write, collapsed per word
+    last_rd = None
+    n = 0
+    with open(out, "w") as f:
+        f.write("# level addr data occurrence retpc psw nreads  -- after the occurrence-th write of addr=data and nreads data reads, assert `level` when PC==retpc and PSW==psw\n")
+        for rw, addr, mask, data in mame:
+            if rw == "w":
+                key = (addr, data)
+                seen[key] = seen.get(key, 0) + 1
+                recent = (recent + [(addr, data, seen[key], nrd)])[-3:]
+                nrd = 0
+                last_rd = None
+            elif rw == "r" and region(addr) != "rom":
+                # count the way the bench counts: one per word, lanes collapsed
+                if (addr & ~3) != last_rd:
+                    nrd += 1
+                    last_rd = addr & ~3
+            if rw == "r" and SBR + 0x100 <= addr < SBR + 0x140 and (addr & 3) == 0:
+                level = (addr - SBR - 0x100) // 4
+                # v60_do_irq pushes PSW then PC and only then reads the vector;
+                # those two writes are the entry itself, so the trigger is the
+                # write before them -- the last one the interrupted program made.
+                if len(recent) < 3:
+                    continue
+                trig = recent[-3]
+                # The write is only a lower bound: MAME's vblank is a TIME event
+                # and can rise during a later instruction that makes no write
+                # (seen: a DBcc between the last store and the entry). The PC
+                # push -- the second of the two -- says exactly where MAME took
+                # it, so the bench arms on the write and fires on that PC.
+                retpc = recent[-1][1]
+                # ...and the PSW it pushed (the first of the two), because a
+                # loop can pass the entry PC several times between the write
+                # and the entry; the flags pick the iteration.
+                psw = recent[-2][1]
+                # data reads between the trigger write and the entry: the two
+                # frame pushes each record the reads that preceded them (the
+                # PSW push's count is the interrupted program's; the PC push
+                # follows it with none). A polling loop needs this to pick the
+                # iteration, PC and PSW being identical every time round.
+                nreads = recent[-2][3]
+                f.write(f"{level} {trig[0]:08X} {trig[1]:08X} {trig[2]} {retpc:08X} {psw:08X} {nreads}\n")
+                n += 1
+    print(f"{n} interrupt entries -> {out}")
+
+
 if __name__ == "__main__":
     cmd, game = sys.argv[1], sys.argv[2]
-    sys.exit(replay(game) if cmd == "replay" else compare(game))
+    sys.exit({"replay": replay, "compare": compare, "irqs": irqs}[cmd](game))

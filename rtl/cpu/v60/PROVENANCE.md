@@ -70,6 +70,7 @@ that can be re-applied here if Phase 0's timing measurement needs them.
 | s32 `3bce67e`, as imported | 20,701 | **25.1 MHz** | `fp_a[5] -> f_z`, 39.2 ns: the FP compare/normalise tail |
 | s32 `3bce67e`, `S32_V60_NO_FP` | 18,044 | **45.45 MHz** | `ea_ofs -> r[..]`, the EA-to-register write |
 | Model 1 `a7abcbf` fork | 15,755 | 47.21 MHz | `ea_ofs -> r[24]`, 20.6 ns |
+| **this tree**, after the three edits below, `IS_V70=1` | 20,692 | 25.54 MHz | `fp_a[16] -> f_z` — unchanged, as expected of logic-neutral edits |
 
 So the FP group costs 2,657 ALM and 20 MHz of Fmax, which is what s32's own SDC papers over with
 `set_multicycle_path -setup 3 -from fp_a[*]`, and what Model 1 removed by pipelining the tail.
@@ -89,6 +90,8 @@ Both files started byte-identical to upstream (`md5 b349f9d245681e95d33cb8c867d1
 | 2026-09-12 | `s32_v60.sv` | PFU does not issue while `st == S_RESET` | it issued a read of address 0 from the pre-reset `fb_base`/`pc` before the reset-vector fetch; the bytes were discarded but the bus cycle happened. Found by the `tetrisp` boot-trace diff (`scripts/compare_boot_trace.py`), where it was the only discrepancy in 1,173 writes |
 
 | 2026-09-12 | `s32_v60.sv` | five `always @*` → `always_comb` | IEEE 1800 evaluates `always_comb` at time zero; `always @*` waited for an input event, and under ModelSim with `+initreg=r+0` the un-evaluated `fb_need` read 0 and the core dispatched on an empty window (LESSONS_LEARNED, "[MS32] `+initreg=r+0` turns an un-evaluated `always @*` into a confident zero"). No change to synthesised logic; 30/30 after |
+
+| 2026-09-12 | `s32_v60.sv` | `fetch_is_rom` is a parameter pair `IF_ROM{0,1}_{MASK,MATCH}` | it hard-coded upstream's two 24-bit ROM ranges, so `FAST_IFETCH` never served MS32's ROM at `0xFFE00000` (0xFFE0xxxx failed the `[23:20]==F` test, 0xFFF0xxxx passed). Defaults reproduce upstream's expression exactly; `sim/v70_boot_tb` passes the MS32 window |
 
 `s32_v60_bus.sv` is unmodified and unused here: `rtl/cpu/ms32_v70_bus.sv` (this project's own
 file) is the 32-bit adapter.

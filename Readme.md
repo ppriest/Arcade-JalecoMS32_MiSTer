@@ -29,7 +29,10 @@ own number before building on top of it.
 
 ## Building
 
-Quartus 17.0.2. Builds run out of a git worktree, never in the tree:
+Quartus 17.0.2 for the bitstream; ModelSim ASE 10.5b and Verilator 5 (MSYS2's mingw64 package)
+for simulation — the vendored CPU's suite runs under both (`scripts/run_v60_tests.sh`,
+`scripts/run_v60_verilator.sh`), and the boot-trace diff is a Verilator job. Builds run out of a
+git worktree, never in the tree:
 
 ```bash
 python scripts/build_staged.py

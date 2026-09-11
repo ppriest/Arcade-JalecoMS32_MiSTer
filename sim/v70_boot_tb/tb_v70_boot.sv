@@ -47,12 +47,24 @@ wire [3:0]  m_be;
 reg  [31:0] m_rdata;
 reg         m_ack;
 
-s32_v60 #(.START_PC(32'hFFFF_FFF0), .IS_V70(1'b1), .FAST_IFETCH(1'b0)) cpu (
-    .clk(clk), .ce(1'b1), .rst(rst), .fast_ifetch(1'b0),
-    .if_req(), .if_addr(), .if_data(64'd0), .if_ack(1'b0),
+wire       irq_n;
+wire [7:0] irq_vector;
+wire       irq_ack;
+wire        if_req;
+wire [31:0] if_addr;
+reg  [63:0] if_data = 64'd0;
+reg         if_ack = 1'b0;
+reg fastif = 0;
+
+s32_v60 #(.START_PC(32'hFFFF_FFF0), .IS_V70(1'b1), .FAST_IFETCH(1'b1),
+          // the whole 2 MB ROM, mirror bits 29:26 ignored, both ranges
+          .IF_ROM0_MASK(32'hC3E0_0000), .IF_ROM0_MATCH(32'hC3E0_0000),
+          .IF_ROM1_MASK(32'hC3E0_0000), .IF_ROM1_MATCH(32'hC3E0_0000)) cpu (
+    .clk(clk), .ce(1'b1), .rst(rst), .fast_ifetch(fastif),
+    .if_req(if_req), .if_addr(if_addr), .if_data(if_data), .if_ack(if_ack),
     .bus_req(c_req), .bus_we(c_we), .bus_addr(c_addr), .bus_size(c_size),
     .bus_wdata(c_wdata), .bus_rdata(c_rdata), .bus_ack(c_ack),
-    .irq_n(1'b1), .irq_vector(8'h00), .irq_ack(), .nmi_n(1'b1)
+    .irq_n(irq_n), .irq_vector(irq_vector), .irq_ack(irq_ack), .nmi_n(1'b1)
 );
 
 ms32_v70_bus adapter (
@@ -100,6 +112,22 @@ wire        is_io      = !(is_rom | is_scratch | is_nvram | is_priram | is_palra
 function [31:0] rd_rom(input [20:0] o);     rd_rom     = {rom[o+3],     rom[o+2],     rom[o+1],     rom[o]};     endfunction
 function [31:0] rd_scratch(input [16:0] o); rd_scratch = {scratch[o+3], scratch[o+2], scratch[o+1], scratch[o]}; endfunction
 
+// ---------------------------------------------------------------- instruction port
+// +FASTIF=1 serves the core's dedicated 8-byte instruction port from the ROM
+// array with one clock of latency -- what an on-chip instruction cache hit
+// looks like -- instead of routing prefetch through the 32-bit data adapter.
+// It is the A/B for how much of the CPI is fetch (LESSONS/ROADMAP: 73% of
+// cycles in S_FILL on real code through the adapter).
+initial if ($value$plusargs("FASTIF=%d", fastif)) ;
+// the core wants the line already aligned so byte 0 is the frontier byte
+always @(posedge clk) begin
+    if_ack <= if_req;
+    if (if_req) if_data <= (is_rom_a(if_addr)) ?
+        {rom[if_addr[20:0]+7], rom[if_addr[20:0]+6], rom[if_addr[20:0]+5], rom[if_addr[20:0]+4],
+         rom[if_addr[20:0]+3], rom[if_addr[20:0]+2], rom[if_addr[20:0]+1], rom[if_addr[20:0]]} : 64'd0;
+end
+function is_rom_a(input [31:0] x); is_rom_a = ((x & 32'hC3FF_FFFF) >> 21) == 11'b1100_0011_111; endfunction
+
 // ---------------------------------------------------------------- I/O replay
 // MAME's reads of non-ROM/RAM addresses, in order. Loaded from a file the
 // compare script writes: one "addr data" pair per line, hex.
@@ -120,6 +148,82 @@ function [31:0] io_replay(input [31:0] addr);
         if (!found) rp_miss = rp_miss + 1;
     end
 endfunction
+
+// ---------------------------------------------------------------- interrupts
+// MAME's interrupt entries, replayed by POSITION (compare_boot_trace.py irqs):
+// once the bench has seen the occurrence-th write of addr=data it is ARMED,
+// and it asserts `level` on irq_n/irq_vector when the core's PC reaches the
+// PC MAME pushed for that entry, holding it until the core consumes the
+// vector (irq_ack). The write alone was not enough: MAME's vblank is a time
+// event and rose during a DBcc that made no write, so the write is a lower
+// bound and the PC is the exact point. Occurrences are counted per
+// (addr,data) over every write the RTL makes, as the script counted MAME's.
+integer NIRQ = 0;
+reg [7:0]  iq_level [0:4095];
+reg [31:0] iq_addr  [0:4095];
+reg [31:0] iq_data  [0:4095];
+integer    iq_occ   [0:4095];
+reg [31:0] iq_pc    [0:4095];
+reg [31:0] iq_psw   [0:4095];   // the PSW MAME pushed: picks the loop iteration at iq_pc
+integer    iq_nrd   [0:4095];   // data reads MAME made between the trigger write and the entry
+integer iq_next = 0;
+integer rd_since = 0;           // data reads since the pending trigger's write
+reg     iq_armed = 0;        // trigger write seen; fire when the core's PC reaches iq_pc
+// Occurrences are counted GLOBALLY per (addr,data), from reset, exactly as
+// the script counted MAME's -- a key's first occurrence can precede an
+// earlier interrupt, and a count restarted at each ack never reaches it
+// (frame 5, FE80D954=0 occurrence 2, was never taken that way).
+integer wcount [longint];    // associative: {addr,data} -> writes so far
+integer irq_taken = 0;
+
+task automatic note_write(input [31:0] adr, input [31:0] d);
+    longint key;
+    begin
+        key = {adr, d};
+        if (!wcount.exists(key)) wcount[key] = 0;
+        wcount[key] = wcount[key] + 1;
+        if (iq_next < NIRQ && !iq_armed && adr == iq_addr[iq_next] && d == iq_data[iq_next]
+            && wcount[key] == iq_occ[iq_next]) iq_armed <= 1'b1;
+    end
+endtask
+// the pending trigger's count so far, for the live-arm term below
+function automatic integer pending_count();
+    longint key;
+    begin
+        key = {iq_addr[iq_next], iq_data[iq_next]};
+        pending_count = wcount.exists(key) ? wcount[key] : 0;
+    end
+endfunction
+
+// Fire when armed and the core is at MAME's entry PC. COMBINATIONAL, not
+// registered: with SEQ_DISPATCH the successor's S_DECODE is the very clock
+// after pc changes, and a registered irq_n was sampled one instruction late
+// (return PC FFE0EC4C where MAME had FFE0EC49). Held by pc==target until the
+// entry itself moves pc; iq_armed drops on irq_ack.
+// ...and armed COMBINATIONALLY from the write while it is still on the bus,
+// not from its acknowledge: the core posts a store and dispatches the
+// successor before the ack, so pc can reach the target in the same clock the
+// write is requested -- frame 5 was never taken with a registered arm.
+// trig_count counts acknowledged occurrences; the live term is the pending one.
+wire trig_live = m_req && m_we && !m_ack && iq_next < NIRQ && !iq_armed
+                 && a == iq_addr[iq_next] && m_wdata == iq_data[iq_next]
+                 && (pending_count() + 1) == iq_occ[iq_next];
+// The PSW the core would push is its live psw; MAME's v60_do_irq pushes it
+// before touching IE/EL, so the two compare directly. A loop can pass the
+// entry PC several times between the trigger write and MAME's entry, and the
+// flags are what separate the iterations (seen: 01040001 vs 01040002).
+// A polling loop has the same PC and PSW every iteration; what separates the
+// iteration MAME's timer landed on is how many data reads it had made since
+// the trigger write. rd_since counts non-ROM reads after arming.
+assign irq_n      = ~((iq_armed || trig_live) && cpu.pc == iq_pc[iq_next] && cpu.psw == iq_psw[iq_next]
+                      && rd_since == iq_nrd[iq_next]);
+assign irq_vector = iq_level[iq_next];
+always @(posedge clk) if (irq_ack) begin
+    irq_taken <= irq_taken + 1;
+    iq_next <= iq_next + 1;
+    iq_armed <= 1'b0;
+    rd_since <= 0;
+end
 
 // ---------------------------------------------------------------- bus model
 // Registered read, one-cycle ack; byte-enabled writes. 16-bit regions keep
@@ -175,9 +279,11 @@ always @(posedge clk) begin
         m_ack <= 1'b1;
         if (m_we) begin
             do_write(a, m_be, m_wdata);
+            note_write(a, m_wdata);
             $fdisplay(flog, "%0d\tw\t%08X\t%08X\t%08X", n_acc + 1, a, mask_of_be, m_wdata);
         end
         else begin
+            if (iq_armed && !is_rom) rd_since <= rd_since + 1;
             // one call only: io_replay() consumes an entry each time it runs
             rd_now = do_read(a);
             m_rdata <= rd_now;
@@ -232,7 +338,13 @@ initial begin
     if (!$value$plusargs("N=%d", N)) N = 20000;
     hexpath = {"roms/", GAME, "/maincpu.hex"};
     rppath  = {"debug/", GAME, "-boot/", GAME, "_io_replay.txt"};
-    outpath = {"debug/", GAME, "-boot/rtl_boot.trace"};
+    // +TRACE=<name> picks the output file, so a Verilator run and a ModelSim
+    // run of the same game can proceed side by side without clobbering.
+    begin : pick_out
+        string tracename;
+        if (!$value$plusargs("TRACE=%s", tracename)) tracename = "rtl_boot.trace";
+        outpath = {"debug/", GAME, "-boot/", tracename};
+    end
 
     for (i = 0; i < 2097152; i = i + 1) rom[i] = 8'hCD;
     $readmemh(hexpath, rom);
@@ -249,6 +361,22 @@ initial begin
         $fclose(f);
     end
     $display("I/O replay: %0d entries from %s", NREPLAY, rppath);
+
+    begin : load_irqs
+        string irqpath; integer lv, occ, nrd; reg [31:0] ia, id, ipc, ipsw;
+        irqpath = {"debug/", GAME, "-boot/", GAME, "_irqs.txt"};
+        f = $fopen(irqpath, "r");
+        if (f) begin
+            void'($fgets(s, f));   // header line
+            while (!$feof(f) && NIRQ < 4096)
+                if ($fscanf(f, "%d %h %h %d %h %h %d\n", lv, ia, id, occ, ipc, ipsw, nrd) == 7) begin
+                    iq_level[NIRQ] = lv[7:0]; iq_addr[NIRQ] = ia; iq_data[NIRQ] = id; iq_occ[NIRQ] = occ; iq_pc[NIRQ] = ipc; iq_psw[NIRQ] = ipsw; iq_nrd[NIRQ] = nrd;
+                    NIRQ = NIRQ + 1;
+                end
+            $fclose(f);
+        end
+        $display("IRQ replay: %0d entries from %s", NIRQ, irqpath);
+    end
 
     flog = $fopen(outpath, "w");
     $fdisplay(flog, "# RTL bus accesses from reset, in order (%s).", GAME);
@@ -271,7 +399,8 @@ initial begin
             end
         end
     end
-    $fdisplay(flog, "# %0d accesses, %0d I/O replay misses, PC=%08x", n_acc, rp_miss, cpu.pc);
+    $fdisplay(flog, "# %0d accesses, %0d I/O replay misses, %0d of %0d interrupts taken, PC=%08x", n_acc, rp_miss, irq_taken, NIRQ, cpu.pc);
+    $display("V70 IRQ: %0d of %0d replayed interrupts taken", irq_taken, NIRQ);
     $fclose(flog);
     $display("V70 BOOT: %0d accesses logged to %s, %0d I/O replay misses, PC=%08x", n_acc, outpath, rp_miss, cpu.pc);
     $display("V70 CPI: %0d instructions in %0d cycles = %0d.%02d cycles/instr; bus busy %0d cycles (%0d%%), in S_FILL %0d cycles (%0d%%); FP-group instructions %0d",

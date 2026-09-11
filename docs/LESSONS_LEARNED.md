@@ -518,6 +518,28 @@ The cheapest check, and it was skipped for days. See "Timing closure".
   functional test** on any new top-level integration -- it catches port-width and wiring mistakes
   cheaply.
 
+### [MS32] A CPI measured on the power-on RAM test is a CPI of the RAM test
+
+The first throughput figure for the vendored V70 core was 8.48 cycles per
+instruction over six million bus accesses -- within 6% of MAME's flat 8, and
+it went into the roadmap as the basis for the clock decision. It was measured
+on `tetrisp`'s boot before interrupts were replayed, and without a vblank the
+game never leaves its power-on RAM test: unrolled store loops that sit inside
+the core's retained 24-byte fetch window and never miss.
+
+With interrupts replayed the game initialises and runs real code, and the same
+six million accesses cover 1.67 million instructions at **20.1** cycles each,
+73% of them in `S_FILL` -- every taken branch refills a conservative 20-byte
+window through the data adapter. The two runs looked alike from outside:
+same access count, same "BOOT:" line, same pass on the trace diff.
+
+The tell was available and not looked at: 5.97 million instructions for 6
+million accesses is one access per instruction, which only a loop of tiny
+stores achieves; real code with data reads runs several. And Model 1's
+findings had already put this core at 15-18 on real code. When a measurement
+beats the prior art by a factor of two, ask what the workload was before
+recording it -- and put the workload in the same sentence as the number.
+
 ### [MS32] `+initreg=r+0` turns an un-evaluated `always @*` into a confident zero
 
 The vendored V60 core decides whether its fetch window holds enough bytes to

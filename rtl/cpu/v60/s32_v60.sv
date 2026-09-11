@@ -15,6 +15,9 @@
 //                for an input event, and under ModelSim with +initreg=r+0
 //                the un-evaluated fb_need read 0 and the core dispatched on
 //                an empty window. No change to synthesised logic.
+//    2026-09-12  fetch_is_rom (which addresses the FAST_IFETCH port may
+//                serve) is a parameter pair IF_ROM{0,1}_{MASK,MATCH}; the
+//                defaults are upstream's two 24-bit ranges unchanged.
 //  See rtl/cpu/v60/PROVENANCE.md.
 //============================================================================
 //  NEC V60 (uPD70616) / V70 (uPD70632) CPU core for the Sega System 32
@@ -54,6 +57,12 @@ module s32_v60 #(
     // prefetch pay off on the production (gated-ce) build; the unit testbenches
     // run ce=1 (adapter already fast) and leave it 0 so if_* can stay unconnected.
     parameter        FAST_IFETCH = 1'b0,
+    // [MS32] which addresses the fast instruction port may serve (two
+    // mask/match ranges; defaults reproduce upstream's fetch_is_rom).
+    parameter [31:0] IF_ROM0_MASK  = 32'h00E0_0000,
+    parameter [31:0] IF_ROM0_MATCH = 32'h0000_0000,
+    parameter [31:0] IF_ROM1_MASK  = 32'h00F0_0000,
+    parameter [31:0] IF_ROM1_MATCH = 32'h00F0_0000,
     // SEQ_DISPATCH=1: overlap the inter-instruction handoff with the completing
     // instruction (docs/v60-pipelining-plan.md Stage A).  The real uPD70616 runs
     // six concurrent units and overlaps up to four instructions; this core is
@@ -222,8 +231,12 @@ reg [4:0]  fb_wr;
 // per request rather than treating the reset-latched mode as a global bus
 // replacement. All non-ROM instruction fetches retain the shared PCB bus.
 wire [31:0] fetch_frontier = fb_base + {27'b0, fb_wr};
-wire        fetch_is_rom = (fetch_frontier[23:21] == 3'b000) ||
-                           (fetch_frontier[23:20] == 4'hf);
+// [MS32] the fast-fetch ROM window is a parameter pair; the defaults are
+// upstream's two 24-bit ranges exactly (bits 23:21 == 0, bits 23:20 == F).
+// MS32's ROM is at 0xFFE00000 with mirror bits in 29:26, which the 24-bit
+// test half-misses (0xFFE0xxxx fails, 0xFFF0xxxx passes).
+wire        fetch_is_rom = ((fetch_frontier & IF_ROM0_MASK) == IF_ROM0_MATCH) ||
+                           ((fetch_frontier & IF_ROM1_MASK) == IF_ROM1_MATCH);
 wire        use_fast_ifetch = FAST_IFETCH && fast_ifetch && fetch_is_rom;
 reg [7:0]  fb_prev[0:23];   // previous sequential window for tight loops
 reg [31:0] fb_prev_base;

@@ -31,8 +31,33 @@ collected below under "Pitfalls that already bind decisions here".
 
 ## Progress
 
-**Phase 0 in progress (started 2026-09-11).** Exit criteria 1 and 2 are met for the first 1.2M
-accesses of `tetrisp`'s boot; 3 (CPI) and 4 (timing at the CPI-derived clock) are next.
+**Phase 0 complete on its own terms (2026-09-11/12).** All four exit criteria are met for
+`tetrisp`; what remains open is in-design margin, which is Phase 2's to measure.
+
+| criterion | result |
+|---|---|
+| 1. upstream suite unchanged | 30/30 ModelSim, 22/22 Verilator (the other 8 are enum-FSM pokes only ModelSim elaborates); the same after every edit to the core |
+| 2. boots and matches MAME | `tetrisp` from the reset vector through init, video-RAM fill, NVRAM, inputs and DIPs: **all 404,416 writes of a 5M-access MAME trace match in address, data and order**, every ROM word MAME read was read, **28 of 32 interrupts entered at exactly MAME's PC and PSW**. The 4 not taken are the replay harness's limit — vblank is a time event and in a polling loop the iteration is not recoverable from the trace — not a core fault; the discrepancies the comparator reports all follow from those 4 |
+| 3. CPI on real code | **20.1** through the 32-bit data adapter; **7.57 with the 8-byte instruction port served in one clock** (an icache hit). MAME's flat model is 8. So a 20 MHz V70 with an instruction cache is at parity; without one it is 0.4× |
+| 4. timing at that clock | 25.54 MHz standalone with the FP group (path `fp_a -> f_z`), 45.45 MHz without, against a 20 MHz target. Met standalone; the in-design margin at 20 MHz, and whether the FP tail has to be pipelined to keep it, is Phase 2's first Quartus run |
+
+The interrupt-replay mechanism (WORKFLOW §12) reached 28/32 in four refinements — trigger on the
+last write before the entry, then on MAME's pushed PC, then its pushed PSW, then the number of data
+reads since the write; each step was a class of case the previous one could not tell apart. It is
+left there deliberately: the remaining four are inside the game's idle loop, where MAME's frame
+timer alone decides the iteration, and the core has nothing left to prove on them.
+
+- **CPI: 8.48 on the RAM-clear loops, 20.1 on real code** — both on `tetrisp` with single-cycle
+  bench memory, both over 6M bus accesses. The first figure (5.97M instructions) came from a run
+  that never left the power-on RAM test, whose tight loops live inside the core's retained fetch
+  window; it was recorded here as the answer for an hour. The second (1.67M instructions, once
+  interrupts were replayed and the game ran its initialisation) has the core in `S_FILL` for 73%
+  of cycles: every taken branch refills a conservative 20-byte window at ~6 cycles a word through
+  the 32-bit data adapter. That is Model 1's 15–18 corroborated, and the number the clock has to
+  be sized against — at 20 MHz it is ~1 MIPS against the 2.5 a real V70 at MAME's flat 8 implies.
+  The lever is in the core already: the 8-byte `FAST_IFETCH` instruction port (s32 serves it from
+  a ROM icache at `clk_sys` latency). The bench's `+FASTIF=1` A/B measures what it is worth before
+  any cache is designed.
 
 - **CPU vendored**: meathax/s32's `s32_v60` at `3bce67e`, into `rtl/cpu/v60/` with
   `PROVENANCE.md`. The Sega Model 1 fork was evaluated first and not taken — 25/30 on the suite
@@ -51,7 +76,9 @@ accesses of `tetrisp`'s boot; 3 (CPI) and 4 (timing at the CPI-derived clock) ar
   `0xFFE01000`, and through 200,000 MAME accesses **every one of 16,659 writes matches in
   address and data, in order**, and every ROM word MAME read was read. A 1.2M-access run is in
   progress; the game is still in its power-on RAM test at that point, so no I/O has been
-  exercised yet.
+  exercised yet. At 5M MAME accesses the game has initialised every video RAM, NVRAM, and read
+  inputs and DIPs; the first divergence there was MAME taking its first vblank interrupt (delivered
+  the instant a `RETI` set IE), which the bench now replays by position — see WORKFLOW §12.
 - **Standalone timing and area** (`rtl/synth_check/v70`, Quartus 17.0.2, virtual pins, HIGH
   PERFORMANCE EFFORT): the imported core is **20,701 ALM at 25.1 MHz** with the FP group and
   **18,044 ALM at 45.45 MHz** without; the whole gap is the FP compare/normalise tail
@@ -458,17 +485,21 @@ while its memory and video run at 80 MHz. So MS32 gets the same shape.
 | `clk_sys` | dot clock (default) | 6 MHz | 96 / 16 |
 | `clk_sys` | dot clock (alternate) | 8 MHz | 96 / 12 |
 | `clk_sys` | Z80 | 8 MHz | 96 / 12 |
-| `clk_cpu` | V70 | 20 MHz nominal, **higher by measurement** | see Phase 0 (3); `ce = 1` at the chosen rate |
+| `clk_cpu` | V70 | **20 MHz** (960 MHz VCO / 48), `ce = 1` | CPI 8.48 measured; 24 MHz (/40) held in reserve |
 | own output | YMF271 | 16.9344 MHz | its own PLL output |
 
 One VCO serves both: 960 MHz gives 96 (/10) and 20 (/48) exactly, and any `clk_cpu` the Phase 0
 measurement asks for has to be checked for an exact divide before it is adopted.
 
-**The CPU clock rate is an output of Phase 0, not an input to it.** 20 MHz is what the chip ran at;
-what this core needs is whatever makes it do a real board's work in a frame, which at the CPI the
-imported core actually achieves is higher. Running a CPU faster than the original to compensate for
-CPI is a documented divergence, and goes in `docs/MAME_DIVERGENCE.md` with the measurement that
-chose it.
+**The CPU clock rate is an output of Phase 0, not an input to it — and the measurement is in.**
+CPI on `tetrisp` boot code with ideal memory is 8.48 against MAME's flat 8, so at exactly 20 MHz
+the core does ~94% of MAME's V70 work per frame. The plan is therefore **`clk_cpu` = 20 MHz
+exact** (960 MHz VCO: /48; `clk_sys` 96 MHz is /10), the original rate, with two levers held in
+reserve and both already measured: 24 MHz (/40) buys the 6% back and is a documented divergence
+for `docs/MAME_DIVERGENCE.md`; pipelining the FP tail the way Model 1 did takes the core's
+standalone Fmax from 25.1 to ~45 MHz and is the answer if the in-design margin at 20 MHz proves
+thin. What the SDRAM-backed ROM does to the 8.48 is Phase 2's first measurement, and the s32
+instruction cache (`FAST_IFETCH`) is the lever for that one.
 
 **The CPU/system clock crossing is real design work and Model 1 has already solved it once.** Read
 `m1_integrated.sv`'s domain notes before writing a synchroniser.
@@ -590,7 +621,13 @@ captured set of scenes, silent.
 
 **Phase 2 — Hardware bring-up and the first games.**
 SDRAM backend with all clients, the decryption download path, `.mra` generation, inputs and DIPs,
-NVRAM persistence, the ISSP probe and OSD debug page. Exit criteria: `tetrisp`, `hayaosi2` and
+NVRAM persistence, the ISSP probe and OSD debug page. The CPU's program ROM goes behind an
+instruction cache from the start, not as a later optimisation: the 8.48 CPI was measured with
+single-cycle memory, and s32 already has the shape to port — a direct-mapped cache of 64 eight-byte
+lines (`s32_core.sv`, `S32_AREA_ROM_CACHE`) serving the core's `FAST_IFETCH` port at `clk_sys`
+latency from one burst SDRAM client, with the data-side ROM reads sharing the same client. The
+first Phase 2 measurement is the CPI with that in place against the SDRAM model, so that the
+ideal-memory figure is not mistaken for the board's. Exit criteria: `tetrisp`, `hayaosi2` and
 `tp2m32` boot and play on a DE10-nano, silent, with the `ms32_invert_lines` interrupt variant
 exercised by `tp2m32`.
 

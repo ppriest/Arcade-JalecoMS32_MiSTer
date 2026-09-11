@@ -55,8 +55,9 @@ compile.log
 # ModelSim
 # ---------------------------------------------------------------------------
 work/
-# scripts/run_v60_tests.sh builds a second library for the no-FP profile
-work_nofp/
+# every ModelSim library this project's runners create: work/ (run_sim.sh),
+# work_nofp/ (run_v60_tests.sh's no-FP profile), work_bus/ (ad-hoc)
+work_*/
 transcript
 vsim.wlf
 modelsim.ini
@@ -121,3 +122,6 @@ releases/*.rbf
 # ---------------------------------------------------------------------------
 __pycache__/
 *.pyc
+
+# SignalTap file Quartus drops beside a project it opens
+*.sld

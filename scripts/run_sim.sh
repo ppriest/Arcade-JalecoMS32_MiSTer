@@ -52,7 +52,8 @@ echo "--- vlog ---"
 # INITREG defaults to the jotego-style zero-initialisation the sibling cores
 # use. Set INITREG=" " to run four-state (X) instead -- see the note in
 # sim/v70_boot_tb about why that matters for `always @*` blocks.
-"$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION ${INITREG-+initreg=r+0 +initmem=r+0} \
+# VDEFS: extra +define+ switches, e.g. VDEFS=+define+V60_NO_EXEC_RETIRE for an A/B.
+"$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION ${INITREG-+initreg=r+0 +initmem=r+0} ${VDEFS:-} \
     $RTL sim/$TB/*.sv
 
 TOP=$(grep -l -E '^\s*module\s+tb_' sim/$TB/*.sv | head -1 | xargs grep -oE '^\s*module\s+tb_[a-z0-9_]+' | awk '{print $2}')
