@@ -1,0 +1,28 @@
+# Standalone synthesis check for the vendored V70 core: real device, real
+# ALM/Fmax, nothing else in the design. Seta's rtl/synth_check pattern.
+#
+#   cd rtl/synth_check/v70 && quartus_sh --flow compile v70_probe
+#   quartus_sta -t worst.tcl        # worst paths -> worst_summary.rpt
+#
+# Settings copied from upstream s32's verif/quartus_v60/base (its own
+# "HIGH PERFORMANCE EFFORT" measurement harness), plus virtual pins so the
+# I/O count does not exceed the device and pin placement does not distort
+# the core's paths, and a 100 MHz clock the core is not expected to meet --
+# the number wanted is the Fmax the STA reports against it.
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEBA6U23I7
+set_global_assignment -name TOP_LEVEL_ENTITY v70_probe
+set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
+set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name MUX_RESTRUCTURE ON
+set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
+set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+set_global_assignment -name SDC_FILE v70_probe.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE v70_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../cpu/v60/s32_v60.sv
+set_instance_assignment -name VIRTUAL_PIN ON -to *
+set_instance_assignment -name VIRTUAL_PIN OFF -to clk
