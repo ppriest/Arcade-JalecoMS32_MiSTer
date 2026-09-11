@@ -55,6 +55,8 @@ compile.log
 # ModelSim
 # ---------------------------------------------------------------------------
 work/
+# scripts/run_v60_tests.sh builds a second library for the no-FP profile
+work_nofp/
 transcript
 vsim.wlf
 modelsim.ini
