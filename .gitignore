@@ -38,3 +38,84 @@ c5_pin_model_dump.txt
 *_netlist
 *.cdf
 **/.DS_Store
+
+# ---------------------------------------------------------------------------
+# Staged-build worktree (scripts/build_staged.py): each build compiles a
+# snapshot of HEAD there, so Quartus scratch stays out of the repo root and
+# the main tree stays editable during the compile. See docs/WORKFLOW.md.
+# ---------------------------------------------------------------------------
+build/
+quartus_*.log
+q_*.log
+sta*.log
+worst_*.rpt
+compile.log
+
+# ---------------------------------------------------------------------------
+# ModelSim
+# ---------------------------------------------------------------------------
+work/
+transcript
+vsim.wlf
+modelsim.ini
+*.vstf
+sim/**/*.log
+sim/**/*.bin
+sim/**/*.lst
+sim/**/*.hex
+sim/**/*.raw
+sim/**/*.trace
+sim/**/*.dec
+sim/**/*dump*.txt
+sim/**/fixture.txt
+# Vendored cores' SIMULATION-only dumps, written into whatever CWD the
+# simulator runs from.
+/*.raw
+
+# ---------------------------------------------------------------------------
+# Copyrighted MAME ROM dumps -- used locally for bring-up and for building
+# the ROM images the .mra files describe. NEVER committed, in any
+# subdirectory.
+# ---------------------------------------------------------------------------
+roms/
+
+# ---------------------------------------------------------------------------
+# Local hardware-debug scratch: screenshots pulled back off the MiSTer,
+# decoded probe captures, ad-hoc analysis output.
+#
+# Root-only. Anchored with a leading slash because a bare `debug/` matches
+# ANY directory of that name at any depth, which on the Fuuki core silently
+# swallowed rtl/debug/ -- the core's own instrumentation source.
+# ---------------------------------------------------------------------------
+/debug/
+/*.png
+/*.txt
+scratch_*.png
+scratch_*.txt
+cfg.bin
+outfile.bin
+
+# MAME's own state directories, written into whatever directory MAME was
+# launched from.
+cfg/
+nvram/
+snap/
+sta/
+
+# Local MiSTer connection settings (host/user/password) for the deploy
+# scripts -- never committed.
+mister.env
+
+# ---------------------------------------------------------------------------
+# releases/ IS the right home for built bitstreams, but only a build VERIFIED
+# to actually run the games belongs in git. Committing one that merely
+# compiles is actively misleading. Add a good one deliberately:
+#   git add -f "releases/<name>.rbf"
+# ---------------------------------------------------------------------------
+releases/*.rbf
+
+# ---------------------------------------------------------------------------
+# Python scratch
+# ---------------------------------------------------------------------------
+__pycache__/
+*.pyc
