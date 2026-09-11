@@ -1,0 +1,37 @@
+MAME-side patch for the V60 co-simulation corpus (DESIGN.md §11.2).
+Apply to src/devices/cpu/v60/v60.cpp; build MAME; run with
+  -log -debug "trace cosim.tr,maincpu,noloop"
+or set V60_COSIM=1 to stream the binary format below to v60_trace.bin.
+
+Record format (little-endian, 24 bytes/instruction):
+  u32 pc          ; PC at instruction start
+  u32 psw         ; PSW after instruction
+  u8  reg_idx     ; first changed register (0xFF = none)
+  u8  pad[3]
+  u32 reg_val     ; its new value
+  u32 mem_addr    ; last memory write address this instruction (0 = none)
+  u32 mem_val
+
+--- a/src/devices/cpu/v60/v60.cpp
++++ b/src/devices/cpu/v60/v60.cpp
+@@ execute_run @@
+ 		uint32_t inc;
++#ifdef V60_COSIM
++		static FILE *cosim_f = nullptr;
++		static uint32_t prev_reg[32];
++		if (!cosim_f) { cosim_f = fopen("v60_trace.bin", "wb"); memcpy(prev_reg, m_reg, sizeof(prev_reg)); }
++		uint32_t rec[6] = { PC, v60ReadPSW(), 0xff, 0, 0, 0 };
++#endif
+ 		m_PPC = PC;
+ 		debugger_instruction_hook(PC);
+ 		m_icount -= 8;  /* fix me -- this is just an average */
+ 		inc = (this->*s_OpCodeTable[OpRead8(PC)])();
+ 		PC += inc;
++#ifdef V60_COSIM
++		for (int i = 0; i < 32; i++)
++			if (m_reg[i] != prev_reg[i]) { rec[2] = i; rec[4] = m_reg[i]; prev_reg[i] = m_reg[i]; break; }
++		rec[1] = v60ReadPSW();
++		fwrite(rec, sizeof(rec), 1, cosim_f);
++#endif
+ 		if (m_irq_line != CLEAR_LINE)
+ 			v60_try_irq();

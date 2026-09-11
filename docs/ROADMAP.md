@@ -322,10 +322,9 @@ wavetable/PCM engine reading a multi-megabyte sample ROM through the SDRAM arbit
 `ymfm` as the behaviour reference, with its sample cache, envelope pipeline and SDRAM client
 structure all directly relevant. `ymfm`'s `ymf271` model and MAME's `ymf271.cpp` are the spec.
 
-This is Phase 3 work, and with the CPU vendored it is now the **largest from-scratch block in the
-project**. The board-enumeration check that would have found the V70 core was run here too: the only
-other hardware using this chip is Seibu SPI and Sony ZN, neither of which has a MiSTer core. There is
-nothing to borrow.
+This is Phase 3 work. Whether it is from scratch depends on a licence: a YMF271 exists in the
+Seibu SPI MiSTer core and is unlicensed — see "Open items". If a grant is obtained, Phase 3 becomes
+a port; if not, it is the largest from-scratch block in the project.
 
 ## The mixer
 
@@ -643,11 +642,22 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 - ~~**The licence decision.**~~ **Taken: GPL-3.0-or-later**, `LICENSE` replaced, obligations in
   [`THIRD-PARTY.md`](../THIRD-PARTY.md). What stays open is the discipline, not the choice — each
   vendored file's §5(a) change notice has to be kept accurate as it is edited.
-- ~~**Whether a YMF271 core exists somewhere.**~~ **Checked, by the method the V70 search should
-  have used.** Four MAME drivers instantiate `ymf271_device`: `jaleco/ms32.cpp` and
-  `jaleco/bnstars.cpp` (this hardware), `seibu/seibuspi.cpp` (Seibu SPI — Raiden Fighters) and
-  `sony/zn.cpp`. Neither Seibu SPI nor ZN has a MiSTer core; the SPI one is discussed as wanted and
-  blocked on a 386. So the chip has no core to borrow from, and Phase 3 really is from scratch.
+- **A YMF271 core exists, and it is unlicensed.** The board-enumeration check found the boards
+  (`seibu/seibuspi.cpp`, `sony/zn.cpp` besides MS32) and then a web search said no Seibu SPI core
+  exists — wrong for the second time in this document:
+  [zakk4223/Arcade-SeibuSPI_MiSTer](https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer) ships
+  `rtl/ymf271.sv` + `rtl/ymf271_synth.sv` (2,377 lines plus tables), a port of MAME's OPX rewrite:
+  12-voice interpolated PCM, 4-op/2×2-op/3-op FM with all 28 networks, LFO, timers, IRQ — its
+  `STATUS.md` says verified in simulation against MAME register traces and matched on hardware by
+  spectrum (r 0.9999 on `rdft2`), with PFM, PCM alternate loop and the Busy flag as known gaps. Its
+  Z80 interface is the same sixteen-byte window MS32 uses at `0x3f00`. **The repository has no
+  LICENSE file and those files carry no licence header** — only its third-party files (rmonic79's
+  CRT modules, Sorgelig's `sdram.sv`, Martin Donlon's savestate RAM) are licensed. Unlicensed means
+  all rights reserved: it cannot be vendored without the author's grant. Phase 3's first step is to
+  ask zakk4223 for a GPL-3-compatible licence on the two files; from scratch is the fallback, not
+  the plan. Either way the port carries SPI-specific dependencies to strip (`system_consts`, the
+  `ssbus_if` savestate interfaces, a 57.27 MHz `CLK_HZ` constant) and its ALM cost is not separated
+  in that project's figures.
 - **Sprite frame buffer placement** — DDR3 or SDRAM's remainder. Decide by measurement in Phase 1.
 - **Whether the sprite engine can finish a frame.** 4096 slots, each up to 256×256 zoomed, against
   1,615,872 `clk_sys` cycles per frame at 96 MHz (263 lines x 6,144). Instrument from the first

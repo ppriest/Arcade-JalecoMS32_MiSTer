@@ -1,0 +1,85 @@
+m255
+K4
+z2
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dE:/Arcade-JalecoMS32_MiSTer
+vs32_v60
+Z1 DXx6 sv_std 3 std 0 22 AD7iAPLo6nTIKk<N0eo=D3
+Z2 !s110 1789166668
+!i10b 1
+!s100 U3nj<zC8PIz3?0_LfJ7Sm3
+I@aUDTZ1A]@^o[V5b7Qi=g0
+Z3 VDg1SIo80bB@j0V0VzS_@n1
+!s105 s32_v60_sv_unit
+S1
+R0
+Z4 w1789166570
+8rtl/cpu/v60/s32_v60.sv
+Frtl/cpu/v60/s32_v60.sv
+L0 30
+Z5 OV;L;10.5b;63
+r1
+!s85 0
+31
+Z6 !s108 1789166668.000000
+Z7 !s107 rtl/cpu/v60/s32_v60_bus.sv|rtl/cpu/v60/s32_v60.sv|
+Z8 !s90 -quiet|-sv|+define+SIMULATION|-work|work_nofp|+define+S32_V60_NO_FP|rtl/cpu/v60/s32_v60.sv|rtl/cpu/v60/s32_v60_bus.sv|
+!i113 1
+Z9 o-quiet -sv -work work_nofp
+Z10 !s92 -quiet -sv +define+SIMULATION -work work_nofp +define+S32_V60_NO_FP
+Z11 tCvgOpt 0
+vs32_v60_bus
+R1
+R2
+!i10b 1
+!s100 QQzPClo]EdlVJ7KLo?[oI3
+IzI9S95P1IZ?k81;LT`Pz23
+R3
+!s105 s32_v60_bus_sv_unit
+S1
+R0
+R4
+8rtl/cpu/v60/s32_v60_bus.sv
+Frtl/cpu/v60/s32_v60_bus.sv
+L0 8
+R5
+r1
+!s85 0
+31
+R6
+R7
+R8
+!i113 1
+R9
+R10
+R11
+vtb_v60_no_fp
+R1
+!s110 1789166692
+!i10b 1
+!s100 e_aW@>N<aIzh1nB>A:Ti22
+I3B]ER;iNZ7mJcJ4O0IgLF3
+R3
+!s105 tb_v60_no_fp_sv_unit
+S1
+R0
+w1789166104
+8sim/v60/tb_v60_no_fp.sv
+Fsim/v60/tb_v60_no_fp.sv
+L0 7
+R5
+r1
+!s85 0
+31
+!s108 1789166692.000000
+!s107 sim/v60/tb_v60_no_fp.sv|
+!s90 -quiet|-sv|+define+SIMULATION|-work|work_nofp|+define+S32_V60_NO_FP|sim/v60/tb_v60_no_fp.sv|
+!i113 1
+R9
+R10
+R11

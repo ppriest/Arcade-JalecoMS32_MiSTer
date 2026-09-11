@@ -8,7 +8,7 @@ decisions", because it constrains what can be vendored here for the life of the 
 
 ## Why GPL-3, and why it is one-way
 
-The V60/V70 CPU core this project vendors is GPL-3.0-only-or-later. A work containing it must be
+The V60/V70 CPU core this project vendors is GPLv3. A work containing it must be GPLv3 or
 GPL-3.0-or-later. That combination is lawful only because of the `sys/` framework's own licence
 grant — see below — and the consequence is permanent in one direction:
 
@@ -25,28 +25,28 @@ files are byte-identical to this one), so this is not a divergence from them.
 
 ## In use
 
-### meathax/s32 and alphanu1/sega-model1-mister — GPL-3.0-or-later
+### meathax/s32 — GPLv3
 
-<https://github.com/meathax/s32> — the NEC V60/V70 CPU core (`s32_v60.sv`, `s32_v60_bus.sv`) and its
-verification suite (`verif/v60/`, `verif/cosim/`), written for the Sega System 32 MiSTer core.
+<https://github.com/meathax/s32> — the NEC V60/V70 CPU core (`rtl/cpu/v60/s32_v60.sv`,
+`s32_v60_bus.sv`) and its verification suite (`sim/v60/`, `sim/v60/cosim/`), written for the Sega
+System 32 MiSTer core. Vendored verbatim at commit `3bce67e` (2026-08-28); details, and why this copy
+rather than the Sega Model 1 fork of it, in `rtl/cpu/v60/PROVENANCE.md`.
 
-<https://github.com/alphanu1/sega-model1-mister> — the Sega Model 1 MiSTer core, which imported that
-CPU and modified it: the instruction fetch, realign network, loop cache and prefetch unit split out
-into `v60_ifetch.sv`; the floating-point normalise/round/exponent tail folded into one pipelined
-stage; `MOVD` routed through the register file's existing read ports; the group 6/7 scaled index
-computed once. Its per-file headers record each change and the date, as GPLv3 §5(a) requires.
+Upstream's README says "Original core source is licensed under GNU GPLv3" and its `LICENSE` is the
+GPLv3 text, with no or-later statement of its own. **Copyright remains with the upstream author on
+those files.** GPLv3 into a GPL-3.0-or-later work is direct.
 
-This project takes the core through the Model 1 lineage. **Copyright remains with those authors on
-those files.** GPL-3 to GPL-3, so reuse is direct.
+The Model 1 core (<https://github.com/alphanu1/sega-model1-mister>, GPL-3.0-or-later) was
+evaluated and not vendored; nothing from it is in this tree. If its Fmax changes are ever
+re-applied here they come with its §5(a) notices.
 
 Obligations this project carries:
 
 - Publish the source, which this repository does.
 - **GPLv3 §5(a): every modified file must carry prominent notice that it was changed, and a date.**
-  Both upstreams already do this at the top of each file. Our modifications — the 32-bit bus adapter,
-  the widened instruction-fetch address, any V70 wiring — go into that same notice block, appended
-  rather than replacing what is there. Do not strip an upstream notice; it is the licence's
-  requirement on *them*, not a comment.
+  The s32 files carry no per-file copyright or licence line — their header is a design note — and
+  are vendored exactly as found. The first modification here adds a dated change notice above
+  that header, and every later change extends it. Never strip or reword what upstream wrote.
 - Keep `rtl/cpu/v60/PROVENANCE.md` current with what was taken, from which commit, and what was
   changed here. That is this project's own convention rather than a licence term, and it is how the
   next person works out whether an upstream fix applies.
@@ -101,8 +101,8 @@ chip. Same obligations as MAME's BSD-3 files. Not vendored; read, not copied.
 Before publishing an `.rbf`:
 
 1. `LICENSE` is the GPLv3 text.
-2. Every vendored file carries its upstream copyright, its SPDX identifier, and a §5(a) notice
-   listing this project's changes with a date.
+2. Every vendored file carries whatever notice upstream gave it, unstripped, and — if modified
+   here — a §5(a) notice listing this project's changes with a date.
 3. Every vendored directory has a `PROVENANCE.md` naming the upstream repository and commit.
 4. This file lists every dependency actually present in the tree.
 5. No ROM data anywhere in the commit.
