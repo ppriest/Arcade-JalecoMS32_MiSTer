@@ -63,7 +63,30 @@ that can be re-applied here if Phase 0's timing measurement needs them.
   `V60_NO_EXEC_RETIRE`. `S32_V60_NO_FP` compiles the FP group out (reserved-instruction
   exception instead; `tb_v60_no_fp` checks it).
 
+## Measured standalone (Quartus 17.0.2, 5CSEBA6U23I7, `rtl/synth_check/v70` settings, virtual pins)
+
+| core | ALM | Fmax (slow 100C) | worst path |
+|---|---|---|---|
+| s32 `3bce67e`, as imported | 20,701 | **25.1 MHz** | `fp_a[5] -> f_z`, 39.2 ns: the FP compare/normalise tail |
+| s32 `3bce67e`, `S32_V60_NO_FP` | 18,044 | **45.45 MHz** | `ea_ofs -> r[..]`, the EA-to-register write |
+| Model 1 `a7abcbf` fork | 15,755 | 47.21 MHz | `ea_ofs -> r[24]`, 20.6 ns |
+
+So the FP group costs 2,657 ALM and 20 MHz of Fmax, which is what s32's own SDC papers over with
+`set_multicycle_path -setup 3 -from fp_a[*]`, and what Model 1 removed by pipelining the tail.
+Model 1's fork is also ~5,000 ALM smaller with FP present; its `MOVD` read-port and `ea_index`
+changes are the likely reason, and are candidates to re-apply here (with its notices) once the
+CPI measurement says what clock this core actually needs.
+
 ## Local modifications
 
-None. The two files are byte-identical to upstream (`md5 b349f9d245681e95d33cb8c867d16a81` for
-`s32_v60.sv` at import).
+Both files started byte-identical to upstream (`md5 b349f9d245681e95d33cb8c867d16a81` for
+`s32_v60.sv` at import). Changes since, each with a §5(a) notice at the top of the file and an
+`[MS32]` mark at the site:
+
+| date | file | change | why |
+|---|---|---|---|
+| 2026-09-12 | `s32_v60.sv` | `if_addr` widened to `[31:0]` | V70 is a 32-bit machine; MS32 ROM is at `0xFFE00000` |
+| 2026-09-12 | `s32_v60.sv` | PFU does not issue while `st == S_RESET` | it issued a read of address 0 from the pre-reset `fb_base`/`pc` before the reset-vector fetch; the bytes were discarded but the bus cycle happened. Found by the `tetrisp` boot-trace diff (`scripts/compare_boot_trace.py`), where it was the only discrepancy in 1,173 writes |
+
+`s32_v60_bus.sv` is unmodified and unused here: `rtl/cpu/ms32_v70_bus.sv` (this project's own
+file) is the 32-bit adapter.

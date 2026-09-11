@@ -1,4 +1,17 @@
 //============================================================================
+//  MODIFIED for Arcade-JalecoMS32_MiSTer (GPLv3 section 5(a) notice).
+//  Imported from https://github.com/meathax/s32 at commit 3bce67e, GPLv3.
+//  Changes, each marked "[MS32]" at the site:
+//    2026-09-12  if_addr widened from [23:0] to [31:0]: the V70 is a 32-bit
+//                machine and MS32's program ROM sits at 0xFFE00000.
+//    2026-09-12  the prefetch unit no longer issues in S_RESET. It used the
+//                pre-reset fb_base/pc (both 0 after configuration) and put a
+//                read of address 0 on the bus before the reset vector fetch;
+//                on System 32 address 0 is memory, on MS32 it is unmapped.
+//                The fetched bytes were correctly discarded either way; the
+//                bus cycle itself was the defect.
+//  See rtl/cpu/v60/PROVENANCE.md.
+//============================================================================
 //  NEC V60 (uPD70616) / V70 (uPD70632) CPU core for the Sega System 32
 //  MiSTer core.  DESIGN.md §5.
 //
@@ -79,7 +92,7 @@ module s32_v60 #(
     // 8-byte line at if_addr; if_data/if_ack return it.  Left unconnected when
     // FAST_IFETCH=0 (the internal reads are forced to 0 so no X propagates).
     output reg        if_req,
-    output     [23:0] if_addr,       // frontier byte address; s32_core reads the
+    output     [31:0] if_addr,       // [MS32] 32-bit. frontier byte address; s32_core reads the
                                      // containing 8-byte line and returns it already
                                      // aligned so byte0 == the frontier byte (the
                                      // >>foff shift lives there, off the CPU's tight
@@ -182,7 +195,7 @@ reg        pf_loop_hint;      // upcoming DBcc/TB may reuse a complete window
 wire [4:0] pf_high = pf_loop_hint ? 5'd24 : 5'd20;
 // dedicated fast-fetch port: line address of the in-flight prefetch; ack/data
 // forced to 0 when FAST_IFETCH=0 so an unconnected if_* input cannot inject X.
-assign      if_addr   = pf_addr[23:0];   // full byte address; s32_core aligns by [2:0]
+assign      if_addr   = pf_addr;         // [MS32] full 32-bit byte address; the consumer aligns by [2:0]
 wire        if_ack_i  = FAST_IFETCH ? if_ack  : 1'b0;
 wire [63:0] if_data_i = FAST_IFETCH ? if_data : 64'b0;
 wire        fetch_ack = pf_fast ? if_ack_i : pf_ack; // ack from issued transport
@@ -3813,7 +3826,10 @@ else if (ce) begin
         // fb_prev-cached loop (pf_suppress): the loop cache already serves those
         // bytes with zero bus traffic, so prefetching them just thrashes SDRAM.
         // fb_wr<=20 keeps the append within the 24-byte window.
-        if (fb_base == pc && !fb_realigning && fb_wr <= 5'd20
+        // [MS32] st != S_RESET: in the reset cycle fb_base and pc still hold
+        // their pre-reset values (equal, both 0), which satisfied this test
+        // and issued a fetch of address 0 before START_PC was loaded.
+        if (st != S_RESET && fb_base == pc && !fb_realigning && fb_wr <= 5'd20
             && (fb_wr < fb_need || (fb_wr < pf_high && !pf_suppress))) begin
             pf_addr      <= fetch_frontier;
             pf_iss_epoch <= pf_epoch;

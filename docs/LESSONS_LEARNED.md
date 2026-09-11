@@ -518,6 +518,39 @@ The cheapest check, and it was skipped for days. See "Timing closure".
   functional test** on any new top-level integration -- it catches port-width and wiring mistakes
   cheaply.
 
+### [MS32] `+initreg=r+0` turns an un-evaluated `always @*` into a confident zero
+
+The vendored V60 core decides whether its fetch window holds enough bytes to
+decode with `fb_need`, computed in an `always @*` block: `fb_need = 20; if
+(fb_valid != 0) casez (fb[0]) ...`. In ModelSim an `always @*` block does not
+run until one of its inputs changes. At time zero nothing has changed, so
+`fb_need` holds whatever the register started with -- and with `+initreg=r+0`
+(carried over from the sibling cores, where it exists for jotego sound cores
+whose un-reset pipelines are X in a four-state simulator) that is 0. The
+readiness check `fb_valid >= fb_need` became `0 >= 0`, the core dispatched on
+an empty window, decoded the zeros as opcode 0x00 = HALT, and stopped with
+PC still at the reset vector. Twelve cycles later `fb_need` would have read
+20, once the first fetch changed `fb_valid`.
+
+Run four-state, the same register starts X, `X >= X` is X, `if (X)` is not
+taken, and the core waits correctly -- by accident. Both upstreams run this
+core under Verilator and Icarus, neither of which has the time-zero gap, so
+the file was never wrong for them.
+
+Three things follow:
+
+* **`+initreg=r+0` is not a harmless "match hardware" switch.** It matches
+  hardware for registers that hardware initialises to zero and that the RTL
+  then drives; it fabricates a value for a combinational output the simulator
+  has not computed yet. Apply it to the cores that need it, not to everything.
+* **`always_comb` is not a style choice.** IEEE 1800 requires it to evaluate
+  once at time zero; `always @*` does not. A vendored file that uses `always
+  @*` for a signal read before its first input event will behave differently
+  across simulators, and hardware agrees with the `always_comb` reading.
+* The tell was in the first cycle-by-cycle dump: a combinational signal
+  holding a value its own equation could not produce from its inputs. That
+  is worth checking before anything about the logic it feeds.
+
 ## Timing closure
 
 ### Open the STA summary before believing any hardware-vs-simulation divergence
