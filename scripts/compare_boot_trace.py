@@ -94,6 +94,11 @@ def compare(game):
     rtl = collapse(load(d / "rtl_boot.trace"))
     print(f"MAME {len(mame)} collapsed accesses, RTL {len(rtl)}")
 
+    # I/O addresses MAME actually read. An RTL read of an "io" address that MAME
+    # never touched is the prefetcher looking ahead past the end of ROM -- at
+    # 0xFFFFFFFC the next word wraps to 0x00000000 -- and is not a data read.
+    mame_io = {addr for rw, addr, _, _ in mame if rw == "r" and region(addr) == "io"}
+
     def split(acc):
         """[(write or None, [data reads since previous write])], ROM read set."""
         segs, cur, rom = [], [], set()
@@ -102,6 +107,8 @@ def compare(game):
                 segs.append(((addr, mask, data), cur)); cur = []
             elif region(addr) == "rom":
                 rom.add(addr)
+            elif region(addr) == "io" and addr not in mame_io:
+                continue
             else:
                 cur.append((addr, mask, data))
         segs.append((None, cur))

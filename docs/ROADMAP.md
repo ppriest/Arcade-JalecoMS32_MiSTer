@@ -31,8 +31,36 @@ collected below under "Pitfalls that already bind decisions here".
 
 ## Progress
 
-**Nothing built.** This document and the carried-over practice docs are the current state. Phase 0
-has not started.
+**Phase 0 in progress (started 2026-09-11).** Exit criteria 1 and 2 are met for the first 1.2M
+accesses of `tetrisp`'s boot; 3 (CPI) and 4 (timing at the CPI-derived clock) are next.
+
+- **CPU vendored**: meathax/s32's `s32_v60` at `3bce67e`, into `rtl/cpu/v60/` with
+  `PROVENANCE.md`. The Sega Model 1 fork was evaluated first and not taken — 25/30 on the suite
+  against 30/30, with the two real failures being fixes s32 made after the fork (details in
+  PROVENANCE). The core's own thirty benches run under ModelSim here for the first time
+  (`scripts/run_v60_tests.sh`): **30/30**, before and after this project's edits.
+- **32-bit bus adapter** `rtl/cpu/ms32_v70_bus.sv`, the piece upstream's `IS_V70` never became:
+  1..2 aligned 32-bit cycles with byte enables, upstream's four-phase CPU-side handshake kept.
+  `sim/v70_bus_tb`: 36/36, every size at every alignment, read and write, value and cycle count.
+- **Two edits to the vendored core**, each with its §5(a) notice: `if_addr` widened to 32 bits;
+  the prefetch unit no longer issues a read of address 0 during `S_RESET` (found by the trace
+  diff — the only discrepancy in the first 16,659 writes). Plus `always @*` → `always_comb` at
+  five sites, for the ModelSim time-zero reason recorded in LESSONS_LEARNED.
+- **Boot-trace diff against MAME** (`scripts/mame_boot_trace.py`, `compare_boot_trace.py`,
+  `sim/v70_boot_tb`): `tetrisp` boots from the reset vector at `0xFFFFFFF0`, jumps to
+  `0xFFE01000`, and through 200,000 MAME accesses **every one of 16,659 writes matches in
+  address and data, in order**, and every ROM word MAME read was read. A 1.2M-access run is in
+  progress; the game is still in its power-on RAM test at that point, so no I/O has been
+  exercised yet.
+- **Standalone timing and area** (`rtl/synth_check/v70`, Quartus 17.0.2, virtual pins, HIGH
+  PERFORMANCE EFFORT): the imported core is **20,701 ALM at 25.1 MHz** with the FP group and
+  **18,044 ALM at 45.45 MHz** without; the whole gap is the FP compare/normalise tail
+  (`fp_a → f_z`, 39 ns), which s32 constrains away with a multicycle and Model 1 pipelined
+  (its fork: 15,755 ALM, 47.21 MHz). 25.1 MHz clears a 20 MHz V70 only if CPI is near MAME's 8,
+  which is what criterion 3 measures next; the FP-tail pipelining is the known lever if it is not.
+- Found along the way, both recorded: a YMF271 exists in the Seibu SPI MiSTer core and its author
+  has confirmed GPL-3 (Phase 3 becomes a port); and `+initreg=r+0` turned an un-evaluated
+  `always @*` into a zero that halted the first boot attempt at the reset vector.
 
 ## Game scope
 

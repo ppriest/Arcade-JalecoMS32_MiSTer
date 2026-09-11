@@ -1764,6 +1764,25 @@ failed from a wrapper, which is the worst way for it to fail.
 Note `git add --renormalize` fixes the *index* only; the working files need
 rewriting too.
 
+### [MS32] Do not edit a script or a source file while a run that reads it is in flight
+
+`scripts/run_v60_tests.sh` was edited while a copy of it was running. bash
+reads a script incrementally, not up front, so the running instance hit the
+edited bytes mid-file and died with `syntax error near unexpected token` at a
+line that was perfectly well-formed in both the old and the new version -- the
+offsets no longer lined up. The failure surfaced as a suite that "broke" with
+no RTL change, and the first minute went to the RTL.
+
+The same hazard applies to a testbench or RTL file edited while `run_sim.sh`
+is between its compile and its run of that bench, and to a `.qsf` edited
+during a Quartus flow: each stage re-reads the file. LESSONS_LEARNED already
+has the git-branch form of this ("never switch branches while Quartus is
+reading the tree"); this is the single-file form, and it bites on the files
+one is most tempted to keep polishing while waiting for a result.
+
+Rule: once a background run has started, the files it reads are frozen until
+it reports. Queue the edit, or run against a copy.
+
 ## Tooling and workflow (Quartus, ModelSim, and the shell around them)
 
 - **Working directory does not reliably persist into backgrounded shell commands.** Launch every

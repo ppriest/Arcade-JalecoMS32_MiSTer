@@ -10,6 +10,11 @@
 //                on System 32 address 0 is memory, on MS32 it is unmapped.
 //                The fetched bytes were correctly discarded either way; the
 //                bus cycle itself was the defect.
+//    2026-09-12  the five `always @*` blocks are `always_comb`. IEEE 1800
+//                evaluates always_comb once at time zero; `always @*` waits
+//                for an input event, and under ModelSim with +initreg=r+0
+//                the un-evaluated fb_need read 0 and the core dispatched on
+//                an empty window. No change to synthesised logic.
 //  See rtl/cpu/v60/PROVENANCE.md.
 //============================================================================
 //  NEC V60 (uPD70616) / V70 (uPD70632) CPU core for the Sega System 32
@@ -238,7 +243,7 @@ wire [7:0] opcode = fb[0];
 // loops decode sooner.  This avoids five 32-bit fetches after every taken
 // branch while preserving the existing safety margin for variable-length EAs.
 reg [4:0] fb_need;
-always @* begin
+always_comb begin
     fb_need = FB_THRESH;
     if (fb_valid != 0) begin
         casez (fb[0])
@@ -862,7 +867,7 @@ reg  [4:0] rf_raddr_a, rf_raddr_b;
 // in its inferred sensitivity.  These explicit blocks are stable in all
 // simulators and still synthesize as one 32:1 mux per port.
 reg [31:0] rf_rdata_a, rf_rdata_b;
-always @* begin
+always_comb begin
     case (rf_raddr_a)
         5'd0:  rf_rdata_a = r[0];   5'd1:  rf_rdata_a = r[1];
         5'd2:  rf_rdata_a = r[2];   5'd3:  rf_rdata_a = r[3];
@@ -882,7 +887,7 @@ always @* begin
         5'd30: rf_rdata_a = r[30];  default: rf_rdata_a = r[31];
     endcase
 end
-always @* begin
+always_comb begin
     case (rf_raddr_b)
         5'd0:  rf_rdata_b = r[0];   5'd1:  rf_rdata_b = r[1];
         5'd2:  rf_rdata_b = r[2];   5'd3:  rf_rdata_b = r[3];
@@ -951,7 +956,7 @@ wire        eaf_disp_direct = EA_OVERLAP && (fb[5'd2][7:5] < 3'd3);  // modtop==
 // Calling disp_of(3, size) from a continuous assignment cached a prior
 // instruction's byte in ModelSim (GA2 wrote 0x114 instead of 0x16c).
 reg [31:0] eaf_disp;
-always @* begin
+always_comb begin
     case (eaf_disp_sz)
         2'd0: eaf_disp = {{24{fb[5'd3][7]}}, fb[5'd3]};
         2'd1: eaf_disp = {{16{fb[5'd4][7]}}, fb[5'd4], fb[5'd3]};
@@ -960,7 +965,7 @@ always @* begin
 end
 wire [4:0]  eaf_disp_len    = 5'd1 + disp_len(eaf_disp_sz);
 
-always @* begin
+always_comb begin
     rf_raddr_a = 5'd0;
     rf_raddr_b = 5'd0;
     case (st)

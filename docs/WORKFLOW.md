@@ -308,7 +308,39 @@ not a replay of every bisection step.
 
 ROMs live in `roms/` and are **gitignored** — no ROM data is ever committed.
 
-## 12. Licence headers
+## 12. The CPU: its own suite, and the boot-trace diff
+
+The vendored V60/V70 core arrives with thirty benches and they are the regression for any
+change to it — including changes this project makes for the V70:
+
+```
+scripts/run_v60_tests.sh                 # all thirty, one RTL compile, ~2 minutes
+scripts/run_v60_tests.sh tb_v60_fp       # one bench
+```
+
+The test that matters for MS32 is the boot-trace diff, because none of those thirty ran with a
+32-bit bus or an address above 24 bits:
+
+```
+python scripts/mame_boot_trace.py tetrisp 1200000       # MAME: first N bus accesses of a boot
+python scripts/compare_boot_trace.py replay tetrisp     # I/O reads MAME saw, for the bench to replay
+python scripts/build_rom_image.py tetrisp maincpu       # the program ROM, per ROM_START
+scripts/run_sim.sh v70_boot_tb +GAME=tetrisp +N=1400000 # the RTL, logging every bus access
+python scripts/compare_boot_trace.py compare tetrisp    # writes strictly, data reads between writes
+```
+
+What the comparison is and is not: writes are compared strictly in order with data; data reads
+between consecutive writes must match in address order and data; ROM fetches are checked as a
+superset. Instruction-fetch *order* is not compared, because MAME re-reads instruction bytes after
+every access and never reads ahead while this core prefetches 8-20 bytes and shifts — two correct
+cores fetch the same words in different orders. A read of an unmapped address the RTL makes and
+MAME does not is the prefetcher looking past the end of ROM, not a fault.
+
+I/O reads are not modelled in the bench. They are replayed: every read MAME made of an address
+that is neither ROM nor RAM is answered with MAME's own recorded value, in MAME's order. That is
+what keeps the diff about the CPU and nothing else.
+
+## 13. Licence headers
 
 This core is **GPL-3.0-or-later**, forced by the vendored V60/V70 CPU. Full reasoning and the
 release checklist are in [`../THIRD-PARTY.md`](../THIRD-PARTY.md). Three rules while writing code:
