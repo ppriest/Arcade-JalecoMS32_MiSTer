@@ -17,11 +17,39 @@ Numbers not derived from the driver or a capture are marked as estimates.
 | TX, BG | `rtl/video/ms32_tilemap.sv` | `sim/layers_tb` | pixel-exact on all seven captures, ROM latency 12 and 40, no overrun |
 | ROZ | `rtl/video/ms32_roz.sv` | `sim/layers_tb` | pixel-exact on both ROZ captures (simple and per-line); worst line 3,322 clk of 6,144 at latency 40 |
 | Sprites | `rtl/video/ms32_sprite.sv` | `sim/sprite_tb` | pixel-exact on all seven captures; heaviest frame `tetrisp-f4800`, 194 sprites, 37,840 pixel writes, 569,577 clk = 35% of a frame, at ROM latency 12 |
-| Sprite frame buffer (DDR3 transport, clear, line prefetch) | — | — | next |
-| Mixer, palette, brightness | — | — | after the frame buffer |
+| Object RAM + vblank copy | `rtl/video/ms32_objram.sv` | `sim/video_tb` | 32,768-clock copy at vblank start; the engine starts on copy_done |
+| Sprite frame buffer | `rtl/video/ms32_sprite_fb.sv` | `sim/video_tb` | two DDR3 banks, 64-bit write combining with byte enables, line read one line ahead, read-then-clear; BURSTCNT=1 transactions |
+| Mixer, palette, brightness | `rtl/video/ms32_mixer.sv` | `sim/video_tb` | priority-RAM probes walked at vblank; MAME's case table; three 8x9 brightness multipliers (the one multiplier kept, see WORKFLOW §13) |
+| Whole path | `rtl/video/ms32_video.sv` | `sim/video_tb` vs `reference.png` | pixel-exact on all seven captures at ROM latency 12 / DDRAM busy 6, read latency 20; heaviest sprite frame 41% (tetrisp-f4800), most DDRAM traffic 141k writes + 72k reads per frame (gametngk-f3000, full-screen sprites) |
+| Whole path, slow memory | `sim/video_tb` at ROM latency 40, DDRAM busy 20 / read latency 60 | — | pixel-exact on gametngk-f3000 and tetrisp-f4800 once line reads and clears became 80-beat bursts (they failed at BURSTCNT=1: 160 single-word transactions per line took ~3,700 of 6,144 clocks and starved the sprite writes). Sprite frames then take 45% and 59% of a frame. The burst write protocol is not hardware-verified yet (ms32_sprite_fb header) |
+| Top level | `MS32.sv` | Quartus | video path on the framework and the DDR3 window; RAMs loaded from a capture blob (`scripts/build_capture_blob.py`, OSD "Load capture"); ROM ports stubbed until Phase 2. First staged build (`MS32_stp`, commit 920131a): 8,871 ALMs, 3,162,305 block memory bits in 398 of 553 M10K blocks, 36 DSP (33 are the framework's), clk_sys 96 MHz worst setup slack +0.66 ns |
 
 `scripts/sim_layer_check.py <capture>` runs the benches and diffs each layer against the model's
-`model_<layer>.u16`; `--lat N` sets the ROM model's latency.
+`model_<layer>.u16` and the whole path against `reference.png`; `--lat N` sets the ROM models'
+latency, `--ddr-busy`/`--ddr-lat` the DDRAM model's.
+
+## On the board
+
+`MS32_stp` with the ROM ports stubbed renders a capture on the DE10-nano (`scripts/deploy.py`
+`--capture`, or the blob inline in an `.mra` from `scripts/build_capture_mra.py`, launched through
+`scripts/mister_launch.py`; `scripts/mister_screenshot.py` takes the native 320×224 frame;
+`scripts/hw_compare.py --stub-rom` renders the model with the same stub pens and diffs). The
+`--layer-colours` blob paints each layer in one flat colour so the screenshot says which layer
+owns each pixel.
+
+| capture | board vs model | what differed |
+|---|---|---|
+| `tetrisp-title` | 84.4% before the fix below | the ROZ layer was absent: every ROZ tile there is tile 0, whose cache tag is the empty RAM's zero, and the cache read as zero after being filled |
+| `tetrisp-title`, ROZ tile forced to 0x102 | 99.6% | ROZ present; residue in the TX text rows only |
+| `p47aces-f1800`, layer colours | 98.9% | ROZ present; residue at TX rows |
+| `gametngk-f3000`, layer colours | 99.7% | |
+
+The ROZ cache read port B combinationally every cycle, including the cycle port A wrote the same
+line, which the RTL and the simulator treat as "old data" and the fitted M10K does not ("No -
+Unsupported Mixed Feed Through Setting" in the RAM table). `dpram` now has a read enable and the
+cache reads only in the cycle it consumes the data. The remaining residue (a few hundred pixels
+on the TX text rows, and the sprite band in the real-palette run) is not diagnosed; the ISSP
+probe is the tool for it and comes with the CPU bring-up.
 
 ## What the hardware does per frame
 

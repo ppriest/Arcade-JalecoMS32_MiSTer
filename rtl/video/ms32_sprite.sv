@@ -74,7 +74,7 @@ module ms32_sprite (
 	output logic [12:0] sprites_drawn    // of the last completed frame
 );
 
-	typedef enum logic [3:0] {S_IDLE, S_READ, S_SETUP, S_CLIP, S_ROW, S_PIX, S_ROM, S_WR, S_NEXT} state_t;
+	typedef enum logic [3:0] {S_IDLE, S_READ, S_SETUP, S_MUL, S_CLIP, S_ROW, S_PIX, S_ROM, S_WR, S_NEXT} state_t;
 	state_t state;
 
 	logic [11:0] idx;                 // sprite slot
@@ -112,6 +112,12 @@ module ms32_sprite (
 	logic [63:0] last_data;
 	logic [7:0]  pen;
 	logic        rom_req_r;
+	// left/top clip: srcx = -destx * incx as a shift-add over the 11 bits of
+	// -destx (WORKFLOW "No multiplies, no divides"); only clipped sprites pay
+	// the eleven cycles
+	logic [10:0] negx;
+	logic [9:0]  negy;
+	logic [3:0]  mul_i;
 
 	assign rom_req = rom_req_r & ~rom_valid;
 	assign busy    = (state != S_IDLE);
@@ -173,10 +179,20 @@ module ms32_sprite (
 							// left/top clip against 0
 							destx <= (sx0 < 0) ? 32'sd0 : sx0;
 							desty <= (sy0 < 0) ? 32'sd0 : sy0;
-							srcx  <= (sx0 < 0) ? (32'd0 - sx0) * incx : 32'd0;
-							srcy  <= (sy0 < 0) ? (32'd0 - sy0) * incy : 32'd0;
-							state <= S_CLIP;
+							negx  <= (sx0 < 0) ? 11'(32'd0 - sx0) : 11'd0;
+							negy  <= (sy0 < 0) ? 10'(32'd0 - sy0) : 10'd0;
+							srcx  <= 32'd0;
+							srcy  <= 32'd0;
+							mul_i <= 4'd0;
+							state <= (sx0 < 0 || sy0 < 0) ? S_MUL : S_CLIP;
 						end
+					end
+
+					S_MUL: begin
+						if (negx[mul_i]) srcx <= srcx + (incx << mul_i);
+						if (mul_i < 4'd10 && negy[mul_i]) srcy <= srcy + (incy << mul_i);
+						mul_i <= mul_i + 4'd1;
+						if (mul_i == 4'd10) state <= S_CLIP;
 					end
 
 					S_CLIP: begin

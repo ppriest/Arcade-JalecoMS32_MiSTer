@@ -107,7 +107,8 @@ module ms32_tilemap #(
 	end
 	wire [3:0] fy = TILE_16 ? sy[3:0] : {1'b0, sy[2:0]};
 
-	wire [9:0] x_of_tile = {4'd0, 6'(NTILES - tiles_left)} * 10'(T) - {6'd0, TILE_16 ? sx[3:0] : {1'b0, sx[2:0]}};
+	wire [5:0] tile_k = 6'(NTILES - tiles_left);
+	wire [9:0] x_of_tile = (TILE_16 ? {tile_k, 4'b0000} : {1'b0, tile_k, 3'b000}) - {6'd0, TILE_16 ? sx[3:0] : {1'b0, sx[2:0]}};
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
@@ -199,7 +200,7 @@ module ms32_tilemap #(
 		.a_wdata({tcol, wr_pen}),
 		.a_rdata(),
 		.b_addr({~fetch_bank, hcnt[8:0]}),
-		.b_rdata(rd_q)
+		.b_re(1'b1), .b_rdata(rd_q)
 	);
 
 	assign colour = rd_q[11:8];

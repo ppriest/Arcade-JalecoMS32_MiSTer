@@ -111,8 +111,16 @@ the model's per-layer dump on every capture: TX/BG on all seven, ROZ on the two 
 on all seven, all 71,680 of 71,680 pixels, at ROM latency 12 and (tilemaps, ROZ) 40. Measured
 budgets: ROZ worst line 3,322 of 6,144 clocks; the sprite engine's heaviest captured frame takes
 35% of a frame into an ideal frame buffer. Status table and per-engine numbers in
-`docs/phase1_video.md`. Still to build: the sprite frame buffer's DDR3 transport, the mixer and
-the palette, then the top-level wiring and the first Quartus build with video in it.
+`docs/phase1_video.md`. The sprite frame buffer (DDR3, write-combined, read-then-clear), the object-RAM copy and the mixer
+with palette and brightness followed, and `sim/video_tb` runs the whole path from a capture through
+DDRAM and ROM models: **all seven captures match MAME's screenshot, 71,680 of 71,680 pixels**,
+including at ROM latency 40 and DDRAM busy 20 / read latency 60 (the latter only once line reads
+and clears became 80-beat bursts; single-word transactions starved the sprite writes). `MS32.sv` wires the path to the
+framework with a capture loader on the HPS download path, so the same frames can be rendered on
+the board before a CPU exists. Multiplies were taken out of the engines afterwards (WORKFLOW §13);
+the three brightness multipliers in the mixer are the documented exception.
+The first staged build with the video path passed the gate: 8,871 ALMs, 398 of 553 M10K blocks
+(the video RAMs are 3.16 Mbit as budgeted), clk_sys 96 MHz with +0.66 ns worst setup slack.
 
 ## Game scope
 
@@ -773,13 +781,24 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 
 ## Next steps
 
-1. Rename `Template.*` to `JalecoMS32.*`, create the second revision, and get an empty core building
-   through `scripts/build_staged.py` — so the build gate exists before there is anything to gate.
-2. Port `scripts/` from Seta: `deploy.py`, `run_sim.sh`, `cfg.py`, `read_issp.tcl`,
-   `sta_failing_paths.tcl`, `mame_capture.py` + `mame/*.lua`, `parse_mame_trace.py`, `boot_trace.py`,
-   `build_mra.py`/`mra.py`/`validate_mra.py`, `memdump.py`. Header comments intact.
-3. Capture `tetrisp` reference data from MAME: boot trace, program-ROM disassembly at known offsets,
-   VRAM/vreg/spriteram/palette dumps at chosen frames.
-4. Verify the decryption inverse against a real ROM offline, in Python, before any RTL.
-5. Start Phase 0: vendor `s32_v60` (licence settled), run its own suite unchanged, then the 32-bit
-   bus adapter, then the `tetrisp` trace diff, then the CPI measurement.
+The five original steps (project rename, script ports, MAME captures, the decryption check, Phase 0)
+are done; the Progress section has the numbers. What follows:
+
+1. **Render a capture on the board.** Deploy `MS32_stp` and a capture blob (`scripts/deploy.py
+   --rbf-only --capture <name>`), load it from the OSD, compare against `reference.png`. With the
+   ROM ports stubbed the pens are placeholders, so what this checks is the CRTC on a real display,
+   the DDRAM burst write protocol (unverified until then), the loader, and every engine's timing
+   flags on the LED.
+2. **M10K budget, re-done from the fitted numbers.** The video path alone fits in 398 of 553 blocks.
+   What remains to add is the work RAM (128 KB, 128 blocks at 32 bits wide), Z80 RAM (16),
+   NVRAM (8) and whatever the CPU core needs: 152 of the 155 blocks left. That is no margin.
+   Candidates, to be decided by measurement: pack the palette as 24 bits per entry (saves ~32
+   blocks), put the Z80 RAM or NVRAM in the SDRAM's remainder, size the ROZ granule cache down.
+3. **Phase 2 memory backend.** Port Seta's `sdram.sv` (with the `dq_in` fix), the arbiter and the
+   download path with the tile decryption in it; serve the four ROM ports the video path already
+   has; then the CPU's ROM and the instruction cache.
+4. **Phase 2 CPU integration.** `ms32_v70_bus` on the RAMs and registers, the sysctrl interrupt
+   controller (levels, acks, `invert_lines`), inputs and DIPs, `.mra` generation, `tetrisp` booting
+   on the board.
+5. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
+   `wr_stall_cycles` growing, row bursts are the next transport change.

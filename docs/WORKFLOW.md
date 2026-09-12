@@ -368,7 +368,18 @@ I/O reads are not modelled in the bench. They are replayed: every read MAME made
 that is neither ROM nor RAM is answered with MAME's own recorded value, in MAME's order. That is
 what keeps the diff about the CPU and nothing else.
 
-## 13. Licence headers
+## 13. No multiplies, no divides, in new RTL
+
+A `*` in RTL is a DSP block or a wide LUT multiplier; a `/` is a large combinational divider.
+Neither is what the original chips did, and both cost area and Fmax. When writing a new CPU, sound
+or video core, express the arithmetic with **shifts, masks and adds** even where MAME writes a
+multiply or a divide: `y * 640` is `(y << 9) + (y << 7)`, `x * inc` inside a loop is an
+accumulator stepped by `inc`, `/ 256` is `>> 8`. Where a product is genuinely needed and not every
+clock (a clipped sprite's source offset, say), a serial shift-add stepper over a few cycles is the
+form. Where one must stay at pixel rate (palette brightness), keep it to a DSP-sized width and say
+so in a comment. Before committing RTL, grep it for `*` and `/` outside comments.
+
+## 14. Licence headers
 
 This core is **GPL-3.0-or-later**, forced by the vendored V60/V70 CPU. Full reasoning and the
 release checklist are in [`../THIRD-PARTY.md`](../THIRD-PARTY.md). Three rules while writing code:

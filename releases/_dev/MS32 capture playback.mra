@@ -1,0 +1,8 @@
+<!-- Development launcher: loads the core with no ROM so a capture blob can be
+     rendered from the OSD ("Load capture" browses /media/fat/games/<setname>, so the setname is MS32).
+     Not a game; not part of a release. -->
+<misterromdescription>
+  <name>MS32 capture playback</name>
+  <setname>MS32</setname>
+  <rbf>Arcade-JalecoMS32</rbf>
+</misterromdescription>

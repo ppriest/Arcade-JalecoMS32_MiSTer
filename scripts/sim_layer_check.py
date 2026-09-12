@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 # different operating system (LESSONS_LEARNED, "bash on a Windows dev box
 # may be WSL's"). The first symptom was run_sim.sh reporting ModelSim absent.
 # which bench renders which layer
-BENCHES = {"layers_tb": ["tx", "bg", "roz"], "sprite_tb": ["sprites"]}
+BENCHES = {"layers_tb": ["tx", "bg", "roz"], "sprite_tb": ["sprites"], "video_tb": ["rgb"]}
 BASHES = [r"C:\Program Files\Git\usr\bin\bash.exe", r"E:\msys64\usr\bin\bash.exe"]
 
 
@@ -31,7 +31,10 @@ def main():
     ap.add_argument("capture")
     ap.add_argument("--game", default=None)
     ap.add_argument("--lat", type=int, default=12, help="ROM model latency in clocks")
-    ap.add_argument("--layers", default="tx,bg,roz,sprites")
+    ap.add_argument("--ddr-busy", type=int, default=6, help="video_tb: DDRAM busy clocks per transaction")
+    ap.add_argument("--ddr-lat", type=int, default=20, help="video_tb: DDRAM read latency in clocks")
+    ap.add_argument("--layers", default="tx,bg,roz,sprites,rgb",
+                    help="rgb is the whole path (sim/video_tb) against reference.png")
     a = ap.parse_args()
     game = a.game or a.capture.split("-")[0]
     layers = a.layers.split(",")
@@ -40,7 +43,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     for layer in layers:
-        if not (d / f"model_{layer}.u16").exists():
+        if layer != "rgb" and not (d / f"model_{layer}.u16").exists():
             subprocess.run([sys.executable, "scripts/render_model.py", a.capture, "--game", game,
                             "--layer", layer], cwd=REPO, check=True)
 
@@ -51,12 +54,12 @@ def main():
         if not set(bench_layers) & set(layers):
             continue
         cmd = [bash, "scripts/run_sim.sh", bench, f"+CAP={a.capture}", f"+GAME={game}",
-               f"+LAT={a.lat}", f"+OUT=simout/{a.capture}"]
+               f"+LAT={a.lat}", f"+DDR_BUSY={a.ddr_busy}", f"+DDR_LAT={a.ddr_lat}", f"+OUT=simout/{a.capture}"]
         r = subprocess.run(cmd, cwd=REPO, text=True, capture_output=True)
         log = out / f"{bench}.log"
         log.write_text(r.stdout + r.stderr, encoding="utf-8")
         for line in r.stdout.splitlines():
-            if any(t in line for t in ("FATAL", "Error", "frame written", "ROMs:", "scroll", "overrun", "roz lines")):
+            if any(t in line for t in ("FATAL", "Error", "frame written", "ROMs:", "scroll", "overrun", "roz lines", "sprites:", "brightness")):
                 print("  " + line.strip())
         if r.returncode:
             print(f"{bench} failed, see {log}")
@@ -64,9 +67,11 @@ def main():
 
     bad = 0
     for layer in layers:
-        rc = subprocess.run([sys.executable, "scripts/compare_sim_layer.py", a.capture, layer,
-                             str(out / f"sim_{layer}.txt")], cwd=REPO).returncode
-        bad += 1 if rc else 0
+        if layer == "rgb":
+            cmd = [sys.executable, "scripts/compare_sim_rgb.py", a.capture, str(out / "sim_rgb.txt")]
+        else:
+            cmd = [sys.executable, "scripts/compare_sim_layer.py", a.capture, layer, str(out / f"sim_{layer}.txt")]
+        bad += 1 if subprocess.run(cmd, cwd=REPO).returncode else 0
     return bad
 
 

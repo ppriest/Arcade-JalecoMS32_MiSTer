@@ -123,10 +123,10 @@ def report_resources(stage):
 # not sit here failing every build -- add each entry in the commit that adds
 # the module it names.
 REQUIRED_INSTANCES = (
-    # Empty until the first MS32 block lands in MS32.sv. Planned entries, to be
-    # added in the commit that adds each module: s32_v60 (the CPU),
-    # ms32_sprite, ms32_roz, ms32_mixer, ymf271, sdram, arcade_video, Hq2x,
+    # The video path (Phase 1). Planned, to be added in the commit that adds
+    # each: s32_v60 (the CPU), ymf271, sdram, arcade_video, Hq2x,
     # screen_rotate_two.
+    "ms32_crtc", "ms32_tilemap", "ms32_roz", "ms32_sprite", "ms32_sprite_fb", "ms32_mixer",
 )
 
 # Macros the design needs defined, and what breaks without each.

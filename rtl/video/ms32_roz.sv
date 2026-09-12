@@ -95,6 +95,15 @@ module ms32_roz (
 	logic [3:0]  lr_cnt;
 	logic [15:0] lr [0:7];
 	logic [31:0] cx, cy, dxx, dxy;
+	// Simple mode's y terms, y*(incyx<<8) and y*(incyy<<8), as accumulators
+	// stepped once per fetched line (WORKFLOW "No multiplies, no divides"):
+	// zero at line 0, +inc per line. Lines are fetched in order once per
+	// frame, so the sum is the product MAME computes for registers held
+	// across the frame -- the only case MAME renders as intended, since
+	// screen_update reads them once.
+	logic [31:0] acc_yx, acc_yy;
+	wire  [31:0] acc_yx_now = (y == 12'd0) ? 32'd0 : acc_yx + (sx17(incyx) << 8);
+	wire  [31:0] acc_yy_now = (y == 12'd0) ? 32'd0 : acc_yy + (sx17(incyy) << 8);
 	logic [9:0]  x;
 	logic [15:0] cyc_cnt, miss_cnt;
 
@@ -105,7 +114,6 @@ module ms32_roz (
 	wire [31:0] st2y = sx18({lr[3][1:0], lr[2]});
 	wire [31:0] lixx = sx17({lr[5][0], lr[4]});
 	wire [31:0] lixy = sx17({lr[7][0], lr[6]});
-	wire [31:0] y32  = {20'd0, y};
 
 	// pixel coordinates from the accumulators
 	wire [10:0] px = cx[26:16];
@@ -128,7 +136,7 @@ module ms32_roz (
 	dpram #(.ADDR_WIDTH(6), .DATA_WIDTH(79)) u_cache (
 		.clk(clk),
 		.a_addr(c_waddr), .a_wel(c_we), .a_weh(c_we), .a_wdata(c_wdata), .a_rdata(),
-		.b_addr(gaddr[8:3]), .b_rdata(c_q)
+		.b_addr(gaddr[8:3]), .b_re(state == P3), .b_rdata(c_q)   // never in the write's cycle (dpram.sv, b_re)
 	);
 	logic [5:0]  c_idx_r;
 	wire         c_hit = cvalid[c_idx_r] && (c_q[78:64] == gaddr[23:9]);
@@ -190,8 +198,10 @@ module ms32_roz (
 							dxx <= lixx << 8;
 							dxy <= lixy << 8;
 						end else begin
-							cx  <= ((sx18(startx) + offsx32) << 16) + y32 * (sx17(incyx) << 8);
-							cy  <= ((sx18(starty) + offsy32) << 16) + y32 * (sx17(incyy) << 8);
+							cx  <= ((sx18(startx) + offsx32) << 16) + acc_yx_now;
+							cy  <= ((sx18(starty) + offsy32) << 16) + acc_yy_now;
+							acc_yx <= acc_yx_now;
+							acc_yy <= acc_yy_now;
 							dxx <= sx17(incxx) << 8;
 							dxy <= sx17(incxy) << 8;
 						end
@@ -282,7 +292,7 @@ module ms32_roz (
 		.a_wdata({tcol, wr_pen}),
 		.a_rdata(),
 		.b_addr({~fetch_bank, hcnt[8:0]}),
-		.b_rdata(rd_q)
+		.b_re(1'b1), .b_rdata(rd_q)
 	);
 
 	assign colour = rd_q[11:8];
