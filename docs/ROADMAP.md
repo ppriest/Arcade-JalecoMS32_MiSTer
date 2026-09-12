@@ -89,6 +89,22 @@ timer alone decides the iteration, and the core has nothing left to prove on the
   has confirmed GPL-3 (Phase 3 becomes a port); and `+initreg=r+0` turned an un-evaluated
   `always @*` into a zero that halted the first boot attempt at the reset vector.
 
+**Phase 1 started (2026-09-12): the software model is pixel-exact on its first frame.**
+`scripts/mame_capture.py` dumps every video RAM and register block through the CPU's address space
+at a chosen frame beside MAME's own screenshot; `scripts/render_model.py` renders that state the way
+`ms32_v.cpp` does — TX/BG tilemaps, ROZ (simple and per-line modes), the zoomed sprite engine, and
+the priority-RAM mixer case by case — and compares. `tetrisp` frame 1200 (title): **71,680 of 71,680
+pixels match.** The tile ROM decryption is verified byte for byte against MAME's post-init regions.
+One finding on the way, recorded in LESSONS_LEARNED: sprite order is decided by the draw loop *and*
+the priority-masked pixel op — first drawn wins, so MAME's tail-to-head walk puts the highest index
+on top. The model is the reference the RTL engines will be checked against, per the Seta pattern.
+
+Since then the model has been run on seven frames across three sets, all 71,680 of 71,680 pixels:
+`tetrisp` 1200/2400/4800/7200 (animated sprites, once the sprite RAM was captured at the driver's
+vblank copy), `p47aces` 1800 (ROZ simple mode), `gametngk` 3000 and 6000 (ROZ per-line mode,
+primask 0xfe shadows, non-square and >1 zooms, ROT270). What each frame covers, and what none does
+yet, is tabled in `docs/phase1_video.md`.
+
 ## Game scope
 
 Twenty-one sets in `ms32.cpp`, all `MACHINE_IMPERFECT_GRAPHICS`, plus `f1superb` which is also
@@ -537,7 +553,7 @@ it is an A/B, not a rebuild.
 four decryption key pairs, ROM region sizes, mahjong inputs, and screen rotation. All of those are
 `.mra` mod-byte configuration, not compile-time.
 
-**Two Quartus revisions, `JalecoMS32_stp` and `JalecoMS32`,** differing only by a `DEBUG_ISSP` macro,
+**Two Quartus revisions, `MS32_stp` and `MS32`,** differing only by a `DEBUG_ISSP` macro,
 as in Seta. See [`WORKFLOW.md`](WORKFLOW.md).
 
 ## Pitfalls that already bind decisions here
@@ -673,6 +689,10 @@ the previous three cores were built with.
 
 Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 
+- **The project is `MS32`, in two revisions** — `MS32_stp` (instrumented: `DEBUG_ISSP=1`, the OSD
+  Debug page visible) and `MS32` (release, both compiled out) — one source, two `.qsf` files
+  identical above their last block. The first staged build of `MS32_stp` (the template demo plus
+  the Debug-page gating, 2026-09-12) ran every gate and produced an `.rbf` in 4.5 minutes.
 - **Builds are staged, never in-tree.** `scripts/build_staged.py` snapshots HEAD into a git worktree
   at `build/` (gitignored) and runs Quartus there. A dirty tree is refused by default. It gates on
   negative slack on **every** clock, checks that required blocks survived to the fitted netlist,
@@ -683,8 +703,8 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
   this PC. A JTAG tool refuses to start while Quartus or ModelSim is running; a build or a simulation
   refuses to start while a JTAG tool holds the marker. Concurrent JTAG and Quartus bugchecked this PC
   three times (`KERNEL_SECURITY_CHECK_FAILURE`, 0x139).
-- **Two revisions from one source**: `JalecoMS32_stp` (ISSP probes + OSD Debug page) and
-  `JalecoMS32` (both compiled out), differing only by `DEBUG_ISSP` in the `.qsf`.
+- **Two revisions from one source**: `MS32_stp` (ISSP probes + OSD Debug page) and
+  `MS32` (both compiled out), differing only by `DEBUG_ISSP` in the `.qsf`.
 - **Releases** are the `.rbf` plus the whole `.mra` set together under `releases/`, parents at the
   top level and clones in `releases/_alternatives/`. They are coupled: the SDRAM layout is encoded in
   both.

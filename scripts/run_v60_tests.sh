@@ -8,22 +8,22 @@
 #     scripts/run_v60_tests.sh tb_v60_fp    # one bench
 #
 # The benches are meathax/s32's (sim/v60/, reused unchanged from
-# verif/v60/ there) and the core is alphanu1/sega-model1-mister's copy of that
-# core (rtl/cpu/v60/), which is the lineage docs/ROADMAP.md chose. Both
-# upstreams run this suite under Verilator and Icarus; this machine has
-# neither, and does have the ModelSim ASE 10.5b that every sibling core is
-# simulated on, so this is the same suite driven by a different simulator.
-# The first run of it here (2026-09-11) passed tb_v60_smoke unmodified.
+# verif/v60/ there) and so is the core (rtl/cpu/v60/, see PROVENANCE.md).
+# Upstream runs this suite under Verilator and Icarus; this is the same suite
+# under the ModelSim ASE 10.5b every sibling core is simulated on, and
+# scripts/run_v60_verilator.sh is the Verilator side. Two simulators on
+# purpose: the `always @*` time-zero entry in LESSONS_LEARNED is a
+# disagreement only the pair could show.
 #
 # Ported from Model 1's tools/run_v60_tests.sh. Two things are carried over
 # from there deliberately:
 #
-#   * Two benches inject an instruction byte with `cpu.fb[3] = ...`. That was
-#     a register in the monolithic core and is a wire fed from v60_ifetch in
-#     the Model 1 split, so those benches are rewritten on the way in
-#     (`cpu.fb[` -> `cpu.u_ifetch.fb[`) rather than edited in sim/v60/, so
-#     the files there stay byte-identical to upstream and diff cleanly
-#     against it.
+#   * Two benches inject an instruction byte with `cpu.fb[3] = ...`. In Model
+#     1's split core that is a wire fed from v60_ifetch, and those benches are
+#     rewritten on the way in (`cpu.fb[` -> `cpu.u_ifetch.fb[`) -- only when
+#     the core under test has that submodule; upstream's monolithic core, the
+#     one vendored here, does not. The files in sim/v60/ stay byte-identical
+#     to upstream either way.
 #   * tb_v60_smc is re-run at +CEDIV=3, because the core runs on a clock
 #     enable on the real board and prefetch ack-sampling bugs hide completely
 #     at ce=1.
@@ -84,7 +84,7 @@ tb_v60_fp tb_v60_fpdecode tb_v60_spidman_xchh tb_v60_spidman_window \
 tb_v60_spidman_gate tb_v60_ea_overlap_disp tb_v60_no_fp"
 [ $# -gt 0 ] && ORDER="$*"
 
-OUT="${OUT:-build/v60ut}"; rm -rf "$OUT"; mkdir -p "$OUT"
+OUT="${OUT:-simout/v60ut}"; rm -rf "$OUT"; mkdir -p "$OUT"
 
 rm -rf work work_nofp
 "$MS/vlib.exe" work >/dev/null

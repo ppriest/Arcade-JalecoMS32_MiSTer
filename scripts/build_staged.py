@@ -19,27 +19,27 @@ The build is exactly HEAD:
   * the built commit is written to build/BUILT_COMMIT beside the log, so
     every .rbf maps to one commit.
 
-    python scripts/build_staged.py                 # compile HEAD, JalecoMS32_stp
-    python scripts/build_staged.py --rev JalecoMS32 # the release revision
+    python scripts/build_staged.py                 # compile HEAD, MS32_stp
+    python scripts/build_staged.py --rev MS32 # the release revision
     python scripts/build_staged.py --seed 12345    # try another placement
     python scripts/build_staged.py --allow-dirty   # HEAD, ignoring edits
 
-TWO REVISIONS, one source. JalecoMS32_stp.qsf defines DEBUG_ISSP: the ISSP
-probes are built and the OSD's Debug page is visible. JalecoMS32.qsf does
+TWO REVISIONS, one source. MS32_stp.qsf defines DEBUG_ISSP: the ISSP
+probes are built and the OSD's Debug page is visible. MS32.qsf does
 not, so the release build compiles the probes, their ring buffer and their counters
 out and hides the page. The default here is the instrumented one, because
 that is what bring-up iterates on; ship the other.
 
 Outputs, all inside the stage, named after the revision:
     build/q_staged.log                     the build log (deploy.py's gate reads it)
-    build/output_files/JalecoMS32_stp.rbf        the bitstream
-    build/output_files/JalecoMS32_stp.sta.summary
+    build/output_files/MS32_stp.rbf        the bitstream
+    build/output_files/MS32_stp.sta.summary
     build/BUILT_COMMIT                     commit, time and SEED
 
 Deploy it by pointing deploy.py at the stage:
     python scripts/deploy.py --rbf-only --log build/q_staged.log \\
-        --rbf build/output_files/JalecoMS32_stp.rbf \\
-        --sta build/output_files/JalecoMS32_stp.sta.summary
+        --rbf build/output_files/MS32_stp.rbf \\
+        --sta build/output_files/MS32_stp.sta.summary
 
 The worktree persists between builds -- Quartus's db/ with it, which costs
 nothing for full compiles and avoids re-checkout churn -- and each run
@@ -60,7 +60,7 @@ QUARTUS_BIN = os.environ.get(
     "QUARTUS_BIN", r"C:\intelFPGA_lite\17.0\quartus\bin64")
 # The revision being built; main() replaces it from --rev. Every output path
 # and the .qsf the seed is patched into are named after it.
-REV = "JalecoMS32_stp"
+REV = "MS32_stp"
 
 
 def run(cmd, **kw):
@@ -123,15 +123,10 @@ def report_resources(stage):
 # not sit here failing every build -- add each entry in the commit that adds
 # the module it names.
 REQUIRED_INSTANCES = (
-    "v70_core",           # the CPU (docs/ROADMAP.md, Phase 0)
-    "ms32_sprite",        # the zoom sprite engine
-    "ms32_roz",           # the ROZ layer
-    "ms32_mixer",         # priority-RAM resolve, palette, brightness
-    "ymf271",             # the sound chip
-    "sdram",              # the memory backend
-    "arcade_video",       # the framework video chain...
-    "Hq2x",               # ...including the scandoubler's blender
-    "screen_rotate_two",  # HDMI rotation
+    # Empty until the first MS32 block lands in MS32.sv. Planned entries, to be
+    # added in the commit that adds each module: s32_v60 (the CPU),
+    # ms32_sprite, ms32_roz, ms32_mixer, ymf271, sdram, arcade_video, Hq2x,
+    # screen_rotate_two.
 )
 
 # Macros the design needs defined, and what breaks without each.
@@ -143,8 +138,9 @@ REQUIRED_INSTANCES = (
 # declared wires. Its DDRAM side stayed connected, so it neither vanished nor
 # went stuck-at, and REQUIRED_INSTANCES above could not have caught it.
 REQUIRED_MACROS = {
-    "MISTER_FB": "HDMI rotation and 180 flip; without it only the aspect "
-                 "ratio changes, and desertwr/gametngk are ROT270",
+    # "MISTER_FB": needed once the video chain lands (HDMI rotation and 180
+    # flip; desertwr/gametngk are ROT270). Not defined by the template .qsf,
+    # so it is not required until MS32.sv drives the FB_* ports.
 }
 
 
@@ -178,9 +174,9 @@ def check_present(stage):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rev", default="JalecoMS32_stp",
-                    help="Quartus revision: JalecoMS32_stp (default) builds the "
-                         "ISSP probes and the Debug page, JalecoMS32 is "
+    ap.add_argument("--rev", default="MS32_stp",
+                    help="Quartus revision: MS32_stp (default) builds the "
+                         "ISSP probes and the Debug page, MS32 is "
                          "the release build with both compiled out")
     ap.add_argument("--seed", type=int,
                     help="override the fitter SEED in the STAGED .qsf "

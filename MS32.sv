@@ -54,29 +54,32 @@ wire [1:0] ar = status[122:121];
 assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
 assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
-`include "build_id.v" 
+`include "build_id.v"
+
+// The Debug page is hidden in the release revision. Every one of its lines
+// carries an H1 prefix, so status_menumask bit 1 hides the whole page; the
+// bits still work if a .CFG sets them, only the MENU goes away. DEBUG_ISSP is
+// defined by MS32_stp.qsf and not by MS32.qsf (docs/WORKFLOW.md §1, §3).
+`ifdef DEBUG_ISSP
+localparam DEBUG_MENU_HIDE = 1'b0;
+`else
+localparam DEBUG_MENU_HIDE = 1'b1;
+`endif
+wire debug_menu_hide = DEBUG_MENU_HIDE;
+
 localparam CONF_STR = {
-	"Template;;",
+	"MS32;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[2],TV Mode,NTSC,PAL;",
 	"O[4:3],Noise,White,Red,Green,Blue;",
 	"-;",
-	"P1,Test Page 1;",
-	"P1-;",
-	"P1-, -= Options in page 1 =-;",
-	"P1-;",
-	"P1O[5],Option 1-1,Off,On;",
-	"d0P1F1,BIN;",
-	"H0P1O[10],Option 1-2,Off,On;",
-	"-;",
-	"P2,Test Page 2;",
-	"P2-;",
-	"P2-, -= Options in page 2 =-;",
-	"P2-;",
-	"P2S0,DSK;",
-	"P2O[7:6],Option 2,1,2,3,4;",
-	"-;",
+	// Debug page: per-engine render disables and CPU pause land here as the
+	// engines are built (Phase 1/2). The all-zero configuration must stay the
+	// correct one, so every switch is worded so that 0 = normal.
+	"H1P1,Debug;",
+	"H1P1-;",
+	"H1P1O[80],Pause CPU,Off,On;",
 	"-;",
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
@@ -102,7 +105,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({status[5]}),
+	.status_menumask({14'd0, debug_menu_hide, 1'b0}),  // H1: the Debug page
 	
 	.ps2_key(ps2_key)
 );

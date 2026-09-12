@@ -45,6 +45,10 @@ c5_pin_model_dump.txt
 # the main tree stays editable during the compile. See docs/WORKFLOW.md.
 # ---------------------------------------------------------------------------
 build/
+# Simulation scratch (runner logs, Verilator build trees). Not build/: that is
+# the Quartus worktree and build_staged.py refuses to start if anything else
+# is there.
+simout/
 quartus_*.log
 q_*.log
 sta*.log

@@ -99,6 +99,28 @@ Sprite depth ordering was inverted on the strength of MAME's draw loop alone
 win, and the *append* side of `get_sprites()`, which decides the net order. Hardware inverted; the
 change was reverted. Half a mechanism is enough to build a confident wrong change.
 
+### [MS32] The sprite list's "which end is on top" is decided by the draw loop AND the pixel op
+
+`ms32_v.cpp`'s `draw_sprites()` walks the list tail-to-head when
+`sprite_ctrl[0x10/4]` bit 15 is clear and head-to-tail otherwise, and the
+natural reading is "last drawn is on top, so reverse order puts sprite 0 on
+top". The Python model built on that reading rendered the tetrisp title logo
+with 182 wrong pixels, all where adjacent letter sprites overlap.
+
+The other half is the pixel op. `prio_zoom_transpen_raw` is MAME's
+priority-masked draw: it ORs `1 << 31` into `pmask` and stamps the priority
+buffer 31 after the first opaque pixel, so a later sprite never overwrites an
+already-drawn pixel -- **the first sprite drawn wins**. Reverse iteration
+therefore puts the HIGHEST index on top, the opposite of the loop's reading,
+and with that the frame is pixel-exact.
+
+This is the Psikyo entry above ("Read both halves of a mechanism before
+changing it") arriving on a different board: a draw loop's direction says
+nothing until the write rule -- overwrite or first-wins -- is read beside it.
+The RTL consequence is the one already in the ROADMAP's pitfall table: a
+line buffer that runs out of time must drop the sprites the chip would draw
+LAST, and here "last" is the low end of the list.
+
 ### Read the framework's source instead of inferring its behaviour
 
 DIP switches were assumed to arrive through the status word, and two fixes were built on that
@@ -1438,6 +1460,23 @@ wrong. Prefer stimulus the design already accepts.
   answered the stage question in one read (delta 0); two white marker lines answered the framing
   question by eye. Both cost a few lines of RTL and one build.
 
+- **[MS32] Dump a double-buffered RAM at the moment the driver copies it, not at the
+  frame notifier.** `ms32_v.cpp` renders sprites from `m_sprram_buffer`, copied from sprite
+  RAM in `screen_vblank()` at vblank START; the machine frame notifier fires at frame END,
+  after the game's vblank handler has written the next frame's list. A sprite RAM dump taken
+  in the notifier is therefore one frame AHEAD of the screenshot taken beside it. The title
+  screen hid it completely (100% match, static sprites); the first animated frames showed
+  it as 1.7% and 0.15% of pixels, every one a sprite, with the model's draw order and pixel
+  op already proven. Rendering frame 7200 with frame 7199's sprite RAM matched to the pixel,
+  which is the test that named it. The fix could not be a timed wait -- `emu.wait` and
+  `emu.wait_next_frame` need a coroutine an autoboot script does not have, and a wait that
+  lands on the vblank instant resumes after the vblank callbacks anyway, with the handler's
+  writes already in -- so the capture arms a write tap on sprite RAM at the end of frame N-1
+  and dumps the RAM on the tap's FIRST hit: the handler's first write after the next vblank
+  begins, which is after the driver's copy and before anything has changed. This is the
+  region-dump twin of the Seta entry on `video:snapshot()` versus
+  `scr:pixels()` two items below: whenever a driver keeps its own copy of something, the
+  reference has to be taken when the copy is.
 - **[Seta] An error inside a MAME write tap is SWALLOWED, so a broken callback
   is indistinguishable from "no writes happened".** The ported capture script
   logged register writes with `scr:vpos()`. MAME 0.286's Lua screen binding has
@@ -1804,6 +1843,38 @@ one is most tempted to keep polishing while waiting for a result.
 
 Rule: once a background run has started, the files it reads are frozen until
 it reports. Queue the edit, or run against a copy.
+
+### [MS32] MAME's native snapshot of a ROT270 set is landscape and turned 180 degrees
+
+`gametngk` (ROT270 in `ms32.cpp`) captured with `-snapview native` gives a
+320x224 `reference.png`, not a portrait one, and the model matched it at 60%
+and 0.3% on two frames. Turned 180 degrees the model matches both to the
+pixel; mirrored on one axis it does not. The driver's own flip bit (sysctrl
+`control_w` bit 1) is clear in both write logs, so the turn belongs to the
+snapshot, not to the game. Reading `render.cpp`/`video.cpp` in a 0.289 tree
+predicts a portrait snapshot for this orientation, and the 0.286 binary
+produces the landscape one; the mechanism is not derived, the transform is
+measured, and `render_model.py` applies it from the `orientation` line the
+capture writes to `_info.txt`, refusing any orientation it has not measured.
+
+Rule: for a rotated set, do not trust the screenshot's orientation from the
+source or the docs. Compare the model under the four flips and record which
+one matches, then pin it in the tool.
+
+### [MS32] `Path.read_text()`/`write_text()` without `encoding=` corrupts UTF-8 on this box
+
+Python on this Windows machine defaults to cp1252. A doc round-tripped
+through `read_text()`/`write_text()` survives only while every byte happens
+to be cp1252-decodable, and any non-ASCII character in the *new* text is
+written as a single cp1252 byte: `docs/phase1_video.md` picked up a bare
+0xD7 for `×` and 0xB0 for `°` this way, and `docs/ROADMAP.md`, which holds a
+byte cp1252 cannot decode, refused to load at all, so half of one edit
+landed and half did not.
+
+Rule: every `read_text`/`write_text`/`open` on a repo file names
+`encoding="utf-8"`. A patch script that touches several files checks them
+all in first, or it is not atomic.
+
 
 ## Tooling and workflow (Quartus, ModelSim, and the shell around them)
 

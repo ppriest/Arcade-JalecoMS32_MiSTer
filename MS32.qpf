@@ -1,0 +1,6 @@
+QUARTUS_VERSION = "17.0"
+
+# Two revisions from one source (docs/WORKFLOW.md): MS32_stp is the
+# instrumented build (ISSP probes, OSD Debug page), MS32 the release.
+PROJECT_REVISION = "MS32_stp"
+PROJECT_REVISION = "MS32"

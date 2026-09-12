@@ -35,18 +35,18 @@ Three properties matter and must survive the port:
 
 ### Two revisions from one source
 
-`JalecoMS32_stp` is the instrumented revision and `JalecoMS32` the release one. The only difference between the
+`MS32_stp` is the instrumented revision and `MS32` the release one. The only difference between the
 two `.qsf` files is `VERILOG_MACRO "DEBUG_ISSP=1"`: with it the ISSP probes are built and the
 OSD's Debug page is visible, without it the probes, their ring buffer, their counters and the menu
 page all compile out. No `#ifdef` clutter in the middle of the logic — the guard sits around the
-probe instances in `JalecoMS32.sv` and around one `localparam` that drives `status_menumask`.
+probe instances in `MS32.sv` and around one `localparam` that drives `status_menumask`.
 
 ```
-python scripts/build_staged.py                  # JalecoMS32_stp, the default
-python scripts/build_staged.py --rev JalecoMS32 # the release build
+python scripts/build_staged.py                  # MS32_stp, the default
+python scripts/build_staged.py --rev MS32 # the release build
 ```
 
-Outputs are named after the revision (`build/output_files/JalecoMS32_stp.rbf`), so the two never
+Outputs are named after the revision (`build/output_files/MS32_stp.rbf`), so the two never
 overwrite each other.
 
 ### The fitter seed is part of the build, and it is recorded
@@ -77,7 +77,7 @@ It prints every clock's slack before copying anything. This exists because a Psi
 mid-Fitter and the deploy that followed happily verified the *previous* build's stale `.rbf` as
 green.
 
-Cores land as `Arcade-JalecoMS32_NNNNNNNN.rbf` with an **incrementing number read back from the device**,
+Cores land as `MS32_NNNNNNNN.rbf` with an **incrementing number read back from the device**,
 so earlier builds stay on the machine as fallbacks. MiSTer launches the highest-numbered one, so
 renaming the newest to `.held` drops back one — a one-command bisection across deployed builds.
 
@@ -230,6 +230,13 @@ What this makes provable offline, before hardware exists:
 | Program ROM disassembly at known offsets | The `.mra` interleave, with no build and no hardware |
 | VRAM / vregs / spriteram dumps at a known frame | Tilemap and sprite engines: preload the dump, render one frame in sim, compare against MAME's output for that frame |
 | Palette RAM dump | The colour path |
+
+This project's instances: `scripts/mame_capture.py <set> --frame N --name X [--wlog]` dumps every
+video RAM and register block (the CPU's dword view, `umask32` included) plus `reference.png`;
+`scripts/render_model.py X --layer all|tx|bg|roz|sprites` renders that state the way `ms32_v.cpp`
+does and reports the pixel match; `scripts/mame/dumpregion.lua` dumps post-init memory regions
+(how the tile decryption was proved); `scripts/mame_boot_trace.py` and `compare_boot_trace.py` are
+the CPU side (§12). The model is checked against MAME first and the RTL against the model.
 
 Traps, all paid for on Fuuki:
 

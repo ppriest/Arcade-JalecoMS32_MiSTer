@@ -53,7 +53,7 @@ tb_v60_incdecmem tb_v60_rotate tb_v60_shaov tb_v60_xch tb_v60_audit tb_v60_bits 
 tb_v60_decimal tb_v60_fpdecode tb_v60_spidman_xchh tb_v60_spidman_window tb_v60_spidman_gate"
 [ $# -gt 0 ] && ORDER="$*"
 
-OUT="build/v60vl"; mkdir -p "$OUT"
+OUT="simout/v60vl"; mkdir -p "$OUT"
 pass=0; fail=0; skip=0; failed=""
 for tb in $ORDER; do
   case " $SKIP " in *" $tb "*) echo "SKIP  $tb (enum-FSM poke; ModelSim runner covers it)"; skip=$((skip+1)); continue;; esac
