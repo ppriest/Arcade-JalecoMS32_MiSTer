@@ -782,23 +782,20 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 ## Next steps
 
 The five original steps (project rename, script ports, MAME captures, the decryption check, Phase 0)
-are done; the Progress section has the numbers. What follows:
+are done, and so is the board check of the video path: all three ROMs-plus-capture `.mra` files
+render pixel-exact against the model, ROMs through SDRAM with the tile decryption, sprite frame
+buffer on DDR3 (`docs/phase1_video.md`, "On the board"). What follows:
 
-1. **Render a capture on the board.** Deploy `MS32_stp` and a capture blob (`scripts/deploy.py
-   --rbf-only --capture <name>`), load it from the OSD, compare against `reference.png`. With the
-   ROM ports stubbed the pens are placeholders, so what this checks is the CRTC on a real display,
-   the DDRAM burst write protocol (unverified until then), the loader, and every engine's timing
-   flags on the LED.
-2. **M10K budget, re-done from the fitted numbers.** The video path alone fits in 398 of 553 blocks.
-   What remains to add is the work RAM (128 KB, 128 blocks at 32 bits wide), Z80 RAM (16),
-   NVRAM (8) and whatever the CPU core needs: 152 of the 155 blocks left. That is no margin.
-   Candidates, to be decided by measurement: pack the palette as 24 bits per entry (saves ~32
-   blocks), put the Z80 RAM or NVRAM in the SDRAM's remainder, size the ROZ granule cache down.
-3. **Phase 2 memory backend.** Port Seta's `sdram.sv` (with the `dq_in` fix), the arbiter and the
-   download path with the tile decryption in it; serve the four ROM ports the video path already
-   has; then the CPU's ROM and the instruction cache.
-4. **Phase 2 CPU integration.** `ms32_v70_bus` on the RAMs and registers, the sysctrl interrupt
-   controller (levels, acks, `invert_lines`), inputs and DIPs, `.mra` generation, `tetrisp` booting
-   on the board.
-5. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
+1. **Implement fast DDRAM load.** The 27 MB set goes through `hps_io`'s byte stream today; on the
+   board the MiSTer's command pipe stayed blocked for 20 to 30 seconds during the transfer. Psikyo's
+   `rom_loader.sv` is the model: the HPS writes the whole `.mra` stream into DDR3 in one go and the
+   core copies it to SDRAM. Here the copier must apply the tile decryption, so the address scramble
+   moves from `ms32_sdram_top`'s ioctl stage to the copier.
+2. **Object RAM copy to DDR3.** Approved: the vblank copy is read sequentially once per frame, so it
+   can leave M10K (64 blocks) for the DDR3 window, written as bursts at vblank and read back in
+   8-record bursts. That leaves room for work RAM, Z80 RAM and NVRAM.
+3. **Phase 2 CPU integration.** `ms32_v70_bus` on the RAMs and registers, the sysctrl interrupt
+   controller (levels, acks, `invert_lines`), the instruction cache on SDRAM port 2, inputs and
+   DIPs, `tetrisp` booting on the board.
+4. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
    `wr_stall_cycles` growing, row bursts are the next transport change.

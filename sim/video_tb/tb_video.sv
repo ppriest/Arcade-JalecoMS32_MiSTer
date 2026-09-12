@@ -19,7 +19,7 @@ always #5.208 clk = ~clk;   // 96 MHz
 reg reset = 1;
 
 string CAP, GAME, OUTDIR;
-integer LAT, DDR_BUSY, DDR_LAT, STUB;
+integer LAT, DDR_BUSY, DDR_LAT, STUB, SDRAM;
 
 // ------------------------------------------------------------- ROMs
 reg [7:0]  txrom  [0:(1 << 19) - 1];
@@ -29,6 +29,8 @@ reg [7:0]  sprrom [0:(1 << 24) - 1];
 integer    txrom_mask, bgrom_mask, rozrom_mask, sprrom_mask;
 
 // ------------------------------------------------------------- DUT
+wire        s_tx_valid, s_bg_valid, s_rz_valid, s_sp_valid;   // from the SDRAM stack (+SDRAM=1)
+wire [63:0] s_tx_data, s_bg_data, s_rz_data, s_sp_data;
 reg         vreg_we = 0;
 reg  [11:0] vreg_off;
 reg  [15:0] vreg_data;
@@ -63,10 +65,10 @@ ms32_video u_video (
 	.objram_we(objram_we), .objram_addr(ram_addr[14:0]),  .objram_wdata(ram_wdata),
 	.palram_we(palram_we), .palram_addr(ram_addr[15:0]),  .palram_wdata(ram_wdata),
 	.priram_we(priram_we), .priram_addr(ram_addr[12:0]),  .priram_wdata(ram_wdata[7:0]),
-	.tx_rom_req(tx_req),  .tx_rom_addr(tx_addr),  .tx_rom_valid(tx_valid),  .tx_rom_data(tx_data),
-	.bg_rom_req(bg_req),  .bg_rom_addr(bg_addr),  .bg_rom_valid(bg_valid),  .bg_rom_data(bg_data),
-	.roz_rom_req(rz_req), .roz_rom_addr(rz_addr), .roz_rom_valid(rz_valid), .roz_rom_data(rz_data),
-	.spr_rom_req(sp_req), .spr_rom_addr(sp_addr), .spr_rom_valid(sp_valid), .spr_rom_data(sp_data),
+	.tx_rom_req(tx_req),  .tx_rom_addr(tx_addr),  .tx_rom_valid(SDRAM ? s_tx_valid : tx_valid),  .tx_rom_data(SDRAM ? s_tx_data : tx_data),
+	.bg_rom_req(bg_req),  .bg_rom_addr(bg_addr),  .bg_rom_valid(SDRAM ? s_bg_valid : bg_valid),  .bg_rom_data(SDRAM ? s_bg_data : bg_data),
+	.roz_rom_req(rz_req), .roz_rom_addr(rz_addr), .roz_rom_valid(SDRAM ? s_rz_valid : rz_valid), .roz_rom_data(SDRAM ? s_rz_data : rz_data),
+	.spr_rom_req(sp_req), .spr_rom_addr(sp_addr), .spr_rom_valid(SDRAM ? s_sp_valid : sp_valid), .spr_rom_data(SDRAM ? s_sp_data : sp_data),
 	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
@@ -76,24 +78,56 @@ ms32_video u_video (
 	.spr_frame_cycles(spr_cycles), .spr_drawn(spr_drawn)
 );
 
+// ------------------------------------------------------------ SDRAM stack
+// +SDRAM=1 routes the four ROM ports through ms32_sdram_top and Seta's
+// command-decoding chip model instead of the latency models below; the
+// model's memory is preloaded with the (decrypted) images at
+// ms32_sdram_top's bases, as a download would leave them.
+wire [12:0] SDRAM_A;
+wire [15:0] SDRAM_DQ;
+wire  [1:0] SDRAM_BA;
+wire        SDRAM_DQML, SDRAM_DQMH, SDRAM_nCS, SDRAM_nWE, SDRAM_nRAS, SDRAM_nCAS, SDRAM_CLK, SDRAM_CKE;
+reg         sd_init = 1;
+wire        sd_tx_req = SDRAM ? tx_req : 1'b0, sd_bg_req = SDRAM ? bg_req : 1'b0;
+wire        sd_rz_req = SDRAM ? rz_req : 1'b0, sd_sp_req = SDRAM ? sp_req : 1'b0;
+ms32_sdram_top u_sdram (
+	.clk(clk), .reset(reset), .init(sd_init),
+	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
+	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(SDRAM_CLK),
+	.ioctl_download(1'b0), .ioctl_index(16'd0), .ioctl_wr(1'b0), .ioctl_addr(27'd0), .ioctl_dout(8'd0), .ioctl_wait(), .key(2'd0),
+	.tx_req(sd_tx_req),  .tx_addr(tx_addr),  .tx_valid(s_tx_valid),  .tx_data(s_tx_data),
+	.bg_req(sd_bg_req),  .bg_addr(bg_addr),  .bg_valid(s_bg_valid),  .bg_data(s_bg_data),
+	.roz_req(sd_rz_req), .roz_addr(rz_addr), .roz_valid(s_rz_valid), .roz_data(s_rz_data),
+	.spr_req(sd_sp_req), .spr_addr(sp_addr), .spr_valid(s_sp_valid), .spr_data(s_sp_data),
+	.if_req(1'b0), .if_addr(18'd0), .if_valid(), .if_data(),
+	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
+	.z80_req(1'b0), .z80_addr(18'd0), .z80_valid(), .z80_data()
+);
+sdram_chip_model_wide u_chip (
+	.clk(clk), .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA),
+	.SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS)
+);
+localparam int W_MAINCPU = 26'h000_0000 / 2, W_TX = 26'h020_0000 / 2, W_BG = 26'h028_0000 / 2, W_ROZ = 26'h068_0000 / 2, W_SPR = 26'h0A8_0000 / 2;
+
 // ------------------------------------------------------------ ROM models
 integer tx_cnt = 0, bg_cnt = 0, rz_cnt = 0, sp_cnt = 0, i;
 reg [27:0] tx_la, bg_la, rz_la, sp_la;
 always @(posedge clk) begin
 	tx_valid <= 0;
-	if (tx_cnt == 0) begin if (tx_req) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) tx_data[8*i +: 8] <= txrom[(tx_addr + i) & txrom_mask]; tx_valid <= 1; end else begin tx_la <= tx_addr; tx_cnt <= LAT; end end end
+	if (tx_cnt == 0) begin if (tx_req && !SDRAM) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) tx_data[8*i +: 8] <= txrom[(tx_addr + i) & txrom_mask]; tx_valid <= 1; end else begin tx_la <= tx_addr; tx_cnt <= LAT; end end end
 	else if (tx_cnt == 1) begin for (i = 0; i < 8; i = i + 1) tx_data[8*i +: 8] <= txrom[(tx_la + i) & txrom_mask]; tx_valid <= 1; tx_cnt <= 0; end
 	else tx_cnt <= tx_cnt - 1;
 	bg_valid <= 0;
-	if (bg_cnt == 0) begin if (bg_req) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) bg_data[8*i +: 8] <= bgrom[(bg_addr + i) & bgrom_mask]; bg_valid <= 1; end else begin bg_la <= bg_addr; bg_cnt <= LAT; end end end
+	if (bg_cnt == 0) begin if (bg_req && !SDRAM) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) bg_data[8*i +: 8] <= bgrom[(bg_addr + i) & bgrom_mask]; bg_valid <= 1; end else begin bg_la <= bg_addr; bg_cnt <= LAT; end end end
 	else if (bg_cnt == 1) begin for (i = 0; i < 8; i = i + 1) bg_data[8*i +: 8] <= bgrom[(bg_la + i) & bgrom_mask]; bg_valid <= 1; bg_cnt <= 0; end
 	else bg_cnt <= bg_cnt - 1;
 	rz_valid <= 0;
-	if (rz_cnt == 0) begin if (rz_req) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) rz_data[8*i +: 8] <= rozrom[(rz_addr + i) & rozrom_mask]; rz_valid <= 1; end else begin rz_la <= rz_addr; rz_cnt <= LAT; end end end
+	if (rz_cnt == 0) begin if (rz_req && !SDRAM) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) rz_data[8*i +: 8] <= rozrom[(rz_addr + i) & rozrom_mask]; rz_valid <= 1; end else begin rz_la <= rz_addr; rz_cnt <= LAT; end end end
 	else if (rz_cnt == 1) begin for (i = 0; i < 8; i = i + 1) rz_data[8*i +: 8] <= rozrom[(rz_la + i) & rozrom_mask]; rz_valid <= 1; rz_cnt <= 0; end
 	else rz_cnt <= rz_cnt - 1;
 	sp_valid <= 0;
-	if (sp_cnt == 0) begin if (sp_req) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) sp_data[8*i +: 8] <= sprrom[(sp_addr + i) & sprrom_mask]; sp_valid <= 1; end else begin sp_la <= sp_addr; sp_cnt <= LAT; end end end
+	if (sp_cnt == 0) begin if (sp_req && !SDRAM) begin if (LAT == 0) begin for (i = 0; i < 8; i = i + 1) sp_data[8*i +: 8] <= sprrom[(sp_addr + i) & sprrom_mask]; sp_valid <= 1; end else begin sp_la <= sp_addr; sp_cnt <= LAT; end end end
 	else if (sp_cnt == 1) begin for (i = 0; i < 8; i = i + 1) sp_data[8*i +: 8] <= sprrom[(sp_la + i) & sprrom_mask]; sp_valid <= 1; sp_cnt <= 0; end
 	else sp_cnt <= sp_cnt - 1;
 end
@@ -190,6 +224,7 @@ initial begin
 	if (!$value$plusargs("DDR_LAT=%d", DDR_LAT))   DDR_LAT = 20;
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/", CAP};
 	if (!$value$plusargs("STUB=%d", STUB)) STUB = 0;
+	if (!$value$plusargs("SDRAM=%d", SDRAM)) SDRAM = 0;
 
 	fd = $fopen({"roms/", GAME, "/txtiles_dec.bin"}, "rb"); if (!fd) begin $display("FATAL no txtiles_dec.bin"); $finish; end
 	n = $fread(txrom, fd); $fclose(fd); txrom_mask = n - 1;
@@ -201,6 +236,16 @@ initial begin
 	n = $fread(sprrom, fd); $fclose(fd); sprrom_mask = n - 1;
 	if ((n & (n - 1)) != 0) sprrom_mask = (1 << $clog2(n)) - 1;   // p47aces: 14 MB, see tb_sprite
 	$display("ROMs: tx %0d bg %0d roz %0d sprite %0d bytes", txrom_mask + 1, bgrom_mask + 1, rozrom_mask + 1, sprrom_mask + 1);
+	if (SDRAM) begin
+		// images into the chip model at the map bases, word by word; the
+		// engines mask their addresses to the region, so the model wraps too
+		// and a partial region holds the ROM repeated (as the .mra does)
+		for (k = 0; k < (26'h028_0000 - 26'h020_0000) / 2; k = k + 1) u_chip.mem[W_TX  + k] = {txrom[(2*k+1) & txrom_mask],  txrom[(2*k) & txrom_mask]};
+		for (k = 0; k < (26'h068_0000 - 26'h028_0000) / 2; k = k + 1) u_chip.mem[W_BG  + k] = {bgrom[(2*k+1) & bgrom_mask],  bgrom[(2*k) & bgrom_mask]};
+		for (k = 0; k < (26'h0A8_0000 - 26'h068_0000) / 2; k = k + 1) u_chip.mem[W_ROZ + k] = {rozrom[(2*k+1) & rozrom_mask], rozrom[(2*k) & rozrom_mask]};
+		for (k = 0; k < (26'h1A8_0000 - 26'h0A8_0000) / 2; k = k + 1) u_chip.mem[W_SPR + k] = {sprrom[(2*k+1) & sprrom_mask], sprrom[(2*k) & sprrom_mask]};
+		$display("SDRAM chip model preloaded; the real memory stack serves the ROM ports");
+	end
 	if (STUB) begin
 		// MS32.sv ROM_STUB: pen = addr[7:0] ^ addr[15:8] ^ addr[23:16] of the granule address, every byte
 		txrom_mask = (1 << 19) - 1; bgrom_mask = (1 << 22) - 1; rozrom_mask = (1 << 22) - 1; sprrom_mask = (1 << 24) - 1;
@@ -214,6 +259,8 @@ initial begin
 	for (k = 0; k < 320*224; k = k + 1) out[k] = 24'h000000;
 
 	repeat (20) @(posedge clk);
+	sd_init = 0;
+	repeat (200) @(posedge clk);   // the controller's init sequence before any request
 	reset = 0;
 	repeat (4) @(posedge clk);
 

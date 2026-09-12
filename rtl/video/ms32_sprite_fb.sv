@@ -154,10 +154,9 @@ module ms32_sprite_fb #(
 	// hardware): RD for one cycle with BURSTCNT, then a data beat on every
 	// cycle with DOUT_READY and !BUSY. Write burst per Avalon-MM: WE held
 	// with the first address and BURSTCNT, one beat transferred on every
-	// cycle with !BUSY, DIN/BE advanced per beat -- NOT yet confirmed on
-	// hardware (ddr_svc reads only); the first board test of this module
-	// is the test of that. Single-beat writes are the shape Psikyo's
-	// ddram_phy verified.
+	// cycle with !BUSY, DIN/BE advanced per beat. The clears use it; the
+	// board renders the three captures exact on this module
+	// (docs/phase1_video.md, "On the board").
 	typedef enum logic [1:0] {D_IDLE, D_RD, D_WR} dstate_t;
 	dstate_t dstate;
 	logic       issued;

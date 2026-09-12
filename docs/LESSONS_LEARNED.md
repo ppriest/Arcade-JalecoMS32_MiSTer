@@ -323,6 +323,11 @@ Keep two reset domains: `core_reset = reset | ioctl_download` gates CPU and vide
 backend keeps the plain `reset`. Signature: a downstream FSM stuck in idle while its trigger input
 is visibly pulsing correctly.
 
+The same holds for anything else a download writes. `ms32_video`'s registers were
+`if (reset) ... else if (vreg_we)`, and the capture blob's scroll, brightness and bgmode writes arrive
+during the download: all dropped, the TX layer drawn at power-up scroll on the board while the bench,
+which does not hold reset across the load, matched MAME.
+
 ### Measure at the pins, not at the intent
 
 The decisive measurement for the reset bug was counting real commands on

@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--lat", type=int, default=12, help="ROM model latency in clocks")
     ap.add_argument("--ddr-busy", type=int, default=6, help="video_tb: DDRAM busy clocks per transaction")
     ap.add_argument("--ddr-lat", type=int, default=20, help="video_tb: DDRAM read latency in clocks")
+    ap.add_argument("--sdram", action="store_true", help="video_tb: the real SDRAM stack against the chip model instead of the latency ROM models")
     ap.add_argument("--layers", default="tx,bg,roz,sprites,rgb",
                     help="rgb is the whole path (sim/video_tb) against reference.png")
     a = ap.parse_args()
@@ -54,7 +55,7 @@ def main():
         if not set(bench_layers) & set(layers):
             continue
         cmd = [bash, "scripts/run_sim.sh", bench, f"+CAP={a.capture}", f"+GAME={game}",
-               f"+LAT={a.lat}", f"+DDR_BUSY={a.ddr_busy}", f"+DDR_LAT={a.ddr_lat}", f"+OUT=simout/{a.capture}"]
+               f"+LAT={a.lat}", f"+DDR_BUSY={a.ddr_busy}", f"+DDR_LAT={a.ddr_lat}", f"+SDRAM={1 if a.sdram else 0}", f"+OUT=simout/{a.capture}"]
         r = subprocess.run(cmd, cwd=REPO, text=True, capture_output=True)
         log = out / f"{bench}.log"
         log.write_text(r.stdout + r.stderr, encoding="utf-8")

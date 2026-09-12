@@ -44,17 +44,17 @@ fi
 rm -rf work
 "$MS/vlib.exe" work >/dev/null
 
-# Every RTL file plus the bench. The vendored CPU's own benches are not
+# Every RTL file, the shared models in sim/common, plus the bench. The vendored CPU's own benches are not
 # compiled here -- they have their own runner -- and rtl/synth_check is a
 # Quartus-only harness.
-RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' | sort)
+RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' -not -name '*_upstream_reference.sv' | sort)
 echo "--- vlog ---"
 # INITREG defaults to the jotego-style zero-initialisation the sibling cores
 # use. Set INITREG=" " to run four-state (X) instead -- see the note in
 # sim/v70_boot_tb about why that matters for `always @*` blocks.
 # VDEFS: extra +define+ switches, e.g. VDEFS=+define+V60_NO_EXEC_RETIRE for an A/B.
 "$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION ${INITREG-+initreg=r+0 +initmem=r+0} ${VDEFS:-} \
-    $RTL sim/$TB/*.sv
+    $RTL sim/common/*.sv sim/$TB/*.sv
 
 TOP=$(grep -l -E '^\s*module\s+tb_' sim/$TB/*.sv | head -1 | xargs grep -oE '^\s*module\s+tb_[a-z0-9_]+' | awk '{print $2}')
 echo "--- vsim $TOP $* ---"

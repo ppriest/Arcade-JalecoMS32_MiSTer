@@ -68,7 +68,8 @@ module ms32_video (
 	// debug
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
 	output logic [23:0] spr_frame_cycles,
-	output logic [12:0] spr_drawn
+	output logic [12:0] spr_drawn,
+	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz
 );
 
 	// ------------------------------------------------------------ registers
@@ -149,7 +150,8 @@ module ms32_video (
 		.vram_addr(roz_va), .vram_data(roz_vd),
 		.rom_req(roz_rom_req), .rom_addr(roz_rom_addr), .rom_valid(roz_rom_valid), .rom_data(roz_rom_data),
 		.pen(roz_pen), .colour(roz_col), .opaque(roz_op), .fetch_overrun(roz_overrun), .overrun_ev(),
-		.line_done(), .line_cycles(), .line_misses()
+		.line_done(), .line_cycles(), .line_misses(),
+		.dbg_fill(dbg_roz_fill), .dbg_hit(dbg_roz_hit), .dbg_pen_nz(dbg_roz_pen_nz)
 	);
 
 	// --------------------------------------------------------------- sprites

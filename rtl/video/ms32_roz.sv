@@ -76,7 +76,11 @@ module ms32_roz (
 	output logic        overrun_ev,
 	output logic        line_done,       // one clk when a line's fetch completes
 	output logic [15:0] line_cycles,     // clocks from line_start to line_done
-	output logic [15:0] line_misses      // ROM fetches in that line
+	output logic [15:0] line_misses,     // ROM fetches in that line
+	// one clk each, for the ISSP probe
+	output logic        dbg_fill,        // a granule written into the cache
+	output logic        dbg_hit,         // a pixel served from the cache
+	output logic        dbg_pen_nz       // a non-zero pen written to the line buffer
 );
 
 	function automatic logic [31:0] sx18(input logic [17:0] v);
@@ -281,6 +285,10 @@ module ms32_roz (
 			end
 		end
 	end
+
+	assign dbg_fill   = c_we;
+	assign dbg_hit    = (state == P4) && c_hit;
+	assign dbg_pen_nz = wr_en && (wr_pen != 8'd0);
 
 	// ---------------------------------------------------------- line buffer
 	logic [11:0] rd_q;

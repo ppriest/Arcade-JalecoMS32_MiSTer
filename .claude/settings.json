@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/mister_screenshot.py:*)",
+      "Bash(python scripts/hw_compare.py:*)",
+      "Bash(python scripts/read_issp.py:*)"
+    ]
+  }
+}

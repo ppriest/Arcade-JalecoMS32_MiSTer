@@ -2,14 +2,14 @@
 //
 //  Jaleco MegaSystem 32 for MiSTer -- top level.
 //
-//  Phase 1 state: the video path (rtl/video/ms32_video.sv) is wired to the
-//  framework and the DDR3 window; there is no CPU, no SDRAM and no sound
-//  yet. The video RAMs and registers are loaded through the HPS download
-//  path from a capture blob (scripts/build_capture_blob.py), so a frame
-//  MAME rendered can be rendered by the hardware and compared -- the same
-//  test the simulation benches run, on the board. The tile and sprite ROM
-//  ports are stubbed until the SDRAM backend exists (Phase 2), so a
-//  capture on hardware shows the right geometry with placeholder pens.
+//  State: the video path (rtl/video/ms32_video.sv) on the framework, the
+//  DDR3 window (sprite frame buffer) and the SDRAM (every ROM, through
+//  rtl/memory/ms32_sdram_top.sv, tile decryption on the way in). No CPU
+//  and no sound yet: the video RAMs and registers can be loaded from a
+//  capture blob (scripts/build_capture_blob.py, ioctl index 2) so a frame
+//  MAME rendered is rendered by the hardware from the real ROMs.
+//
+//  Download indices: 0 the ROM set (.mra), 1 the mod byte, 2 a capture blob.
 //
 //  This file is derived from MiSTer_Template's Template.sv, which is
 //  GPL-2.0-or-later; it is distributed here under GPL-3.0-or-later.
@@ -26,7 +26,6 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -70,7 +69,7 @@ localparam CONF_STR = {
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
-	"F1,BIN,Load capture;",
+	"F2,BIN,Load capture;",
 	"-;",
 	// Debug page. The all-zero configuration must stay the correct one, so
 	// every switch is worded so that 0 = normal.
@@ -100,6 +99,7 @@ wire [15:0] ioctl_index;
 wire        ioctl_wr;
 wire [26:0] ioctl_addr;
 wire  [7:0] ioctl_dout;
+wire        ioctl_wait;
 
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
@@ -119,7 +119,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
-	.ioctl_wait(1'b0),
+	.ioctl_wait(ioctl_wait),
 
 	.ps2_key(ps2_key)
 );
@@ -127,81 +127,71 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 ///////////////////////   CLOCKS   ///////////////////////////////
 
 // ROADMAP "Clock plan": clk_sys 96 MHz for video, memory and sound; clk_cpu
-// 20 MHz for the V70 (Phase 2). One PLL, VCO 960 MHz.
-wire clk_sys, clk_cpu, pll_locked;
+// 20 MHz for the V70 (Phase 2); SDRAM_CLK is clk_sys shifted 180 degrees.
+// One PLL, VCO 960 MHz.
+wire clk_sys, clk_cpu, clk_sdram_shifted, pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
 	.outclk_1(clk_cpu),
+	.outclk_2(clk_sdram_shifted),
 	.locked(pll_locked)
 );
+assign SDRAM_CLK = clk_sdram_shifted;
 
 wire reset = RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download;
 
+///////////////////////   MOD BYTE   //////////////////////////////
+
+// .mra rom index 1: [1:0] the tile decryption key (ms32_jalcrpt_pkg's
+// order: 0 ss91022_10, 1 ss92046_01, 2 ss92047_01, 3 ss92048_01);
+// bit 2 will be ms32_invert_lines (tp2m32, wpksocv2).
+reg [7:0] mod_byte = 8'd0;
+always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd1) mod_byte <= ioctl_dout;
+
 ///////////////////////   CAPTURE LOADER   ////////////////////////
 
-// A capture blob is a stream of little-endian u16 words in the order
-// scripts/build_capture_blob.py writes them; the word index selects the
-// destination. Menu index 1 is "Load capture".
-localparam int W_TXRAM   = 0;                      // 0x2000 words
-localparam int W_BGRAM   = W_TXRAM   + 'h2000;     // 0x2000
-localparam int W_ROZRAM  = W_BGRAM   + 'h2000;     // 0x8000
-localparam int W_LINERAM = W_ROZRAM  + 'h8000;     // 0x800
-localparam int W_OBJRAM  = W_LINERAM + 'h800;      // 0x8000
-localparam int W_PALRAM  = W_OBJRAM  + 'h8000;     // 0x10000
-localparam int W_PRIRAM  = W_PALRAM  + 'h10000;    // 0x2000 (u8 in the low byte)
-localparam int W_VREGS   = W_PRIRAM  + 'h2000;     // 0x400 words: register byte offset = 4 * k
-localparam int W_END     = W_VREGS   + 'h400;
+wire        video_reset, ld_tx, ld_bg, ld_roz, ld_line, ld_obj, ld_pal, ld_pri, ld_vreg;
+wire [17:0] ld_rel;
+wire [15:0] ld_data;
+ms32_capture_loader u_capload (
+	.clk(clk_sys), .reset(reset),
+	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index), .ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
+	.video_reset(video_reset),
+	.ld_tx(ld_tx), .ld_bg(ld_bg), .ld_roz(ld_roz), .ld_line(ld_line), .ld_obj(ld_obj),
+	.ld_pal(ld_pal), .ld_pri(ld_pri), .ld_vreg(ld_vreg), .ld_rel(ld_rel), .ld_data(ld_data)
+);
 
-reg  [7:0]  ld_lo;
-reg         ld_we;
-reg  [17:0] ld_word;
-reg  [15:0] ld_data;
-wire        ld_capture = ioctl_download && (ioctl_index[5:0] == 6'd1);
-always @(posedge clk_sys) begin
-	ld_we <= 1'b0;
-	if (ld_capture && ioctl_wr) begin
-		if (!ioctl_addr[0]) ld_lo <= ioctl_dout;
-		else begin
-			ld_we   <= 1'b1;
-			ld_word <= ioctl_addr[18:1];
-			ld_data <= {ioctl_dout, ld_lo};
-		end
-	end
-end
-wire ld_tx   = ld_we && (ld_word >= W_TXRAM)   && (ld_word < W_BGRAM);
-wire ld_bg   = ld_we && (ld_word >= W_BGRAM)   && (ld_word < W_ROZRAM);
-wire ld_roz  = ld_we && (ld_word >= W_ROZRAM)  && (ld_word < W_LINERAM);
-wire ld_line = ld_we && (ld_word >= W_LINERAM) && (ld_word < W_OBJRAM);
-wire ld_obj  = ld_we && (ld_word >= W_OBJRAM)  && (ld_word < W_PALRAM);
-wire ld_pal  = ld_we && (ld_word >= W_PALRAM)  && (ld_word < W_PRIRAM);
-wire ld_pri  = ld_we && (ld_word >= W_PRIRAM)  && (ld_word < W_VREGS);
-wire ld_vreg = ld_we && (ld_word >= W_VREGS)   && (ld_word < W_END);
-wire [17:0] ld_rel = ld_word - (ld_tx ? 18'(W_TXRAM) : ld_bg ? 18'(W_BGRAM) : ld_roz ? 18'(W_ROZRAM) : ld_line ? 18'(W_LINERAM) :
-                                ld_obj ? 18'(W_OBJRAM) : ld_pal ? 18'(W_PALRAM) : ld_pri ? 18'(W_PRIRAM) : 18'(W_VREGS));
-
-///////////////////////   ROM STUBS   /////////////////////////////
-
-// Until the SDRAM backend exists: a granule one clock after the request,
-// with a pen pattern derived from the address so nothing downstream is
-// optimised away.
-`define ROM_STUB(REQ, ADDR, VALID, DATA) \
-	always @(posedge clk_sys) begin \
-		VALID <= REQ; \
-		DATA  <= {8{ADDR[7:0] ^ ADDR[15:8] ^ ADDR[23:16]}}; \
-	end
+///////////////////////   SDRAM   /////////////////////////////////
 
 wire        tx_req, bg_req, roz_req, spr_req;
 wire [23:0] tx_addr, bg_addr, roz_addr;
 wire [27:0] spr_addr;
-reg         tx_valid, bg_valid, roz_valid, spr_valid;
-reg  [63:0] tx_data, bg_data, roz_data, spr_data;
-`ROM_STUB(tx_req,  tx_addr,  tx_valid,  tx_data)
-`ROM_STUB(bg_req,  bg_addr,  bg_valid,  bg_data)
-`ROM_STUB(roz_req, roz_addr, roz_valid, roz_data)
-`ROM_STUB(spr_req, spr_addr, spr_valid, spr_data)
+wire        tx_valid, bg_valid, roz_valid, spr_valid;
+wire [63:0] tx_data, bg_data, roz_data, spr_data;
+wire        dbg_dl_req, dbg_dl_busy, dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz;
+
+// reset & ~ioctl_download: MiSTer holds RESET for the whole download, and a
+// memory path gated by it never sees a byte (seta_sdram_top's header).
+ms32_sdram_top u_sdram (
+	.clk(clk_sys), .reset(reset & ~ioctl_download), .init(~pll_locked),
+	.SDRAM_A(SDRAM_A), .SDRAM_DQ(SDRAM_DQ), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
+	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(),
+	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index), .ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait), .key(mod_byte[1:0]),
+	.tx_req(tx_req),   .tx_addr(tx_addr),   .tx_valid(tx_valid),   .tx_data(tx_data),
+	.bg_req(bg_req),   .bg_addr(bg_addr),   .bg_valid(bg_valid),   .bg_data(bg_data),
+	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
+	.spr_req(spr_req), .spr_addr(spr_addr), .spr_valid(spr_valid), .spr_data(spr_data),
+	.if_req(1'b0), .if_addr(18'd0), .if_valid(), .if_data(),
+	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
+	.z80_req(1'b0), .z80_addr(18'd0), .z80_valid(), .z80_data(),
+	.dbg_dl_req(dbg_dl_req), .dbg_dl_busy(dbg_dl_busy)
+);
 
 ///////////////////////   VIDEO   /////////////////////////////////
 
@@ -212,7 +202,7 @@ wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 assign DDRAM_CLK = clk_sys;
 
 ms32_video u_video (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(video_reset),   // not reset: see ms32_capture_loader
 	.vreg_we(ld_vreg), .vreg_off({ld_rel[9:0], 2'b00}), .vreg_data(ld_data),
 	.txram_we(ld_tx),     .txram_addr(ld_rel[12:0]),   .txram_wdata(ld_data),
 	.bgram_we(ld_bg),     .bgram_addr(ld_rel[12:0]),   .bgram_wdata(ld_data),
@@ -231,8 +221,22 @@ ms32_video u_video (
 	.vblank_ev(), .field_ev(), .timer_enable(),
 	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
-	.spr_frame_cycles(), .spr_drawn()
+	.spr_frame_cycles(), .spr_drawn(),
+	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz)
 );
+
+`ifdef DEBUG_ISSP
+// JTAG counters for the memory path and the ROZ cache (rtl/debug/issp_probe.sv;
+// read with scripts/read_issp.py, which holds the machine-wide JTAG lock).
+issp_probe #(.INSTANCE_ID("M")) u_issp (
+	.clk(clk_sys),
+	.dl_byte(ioctl_download && ioctl_wr && ioctl_index == 16'd0), .dl_addr_lo(ioctl_addr[15:0]),
+	.dl_req(dbg_dl_req), .dl_busy(dbg_dl_busy),
+	.rom_valid(tx_valid | bg_valid | roz_valid | spr_valid),
+	.ioctl_wait(ioctl_wait), .ioctl_download(ioctl_download), .pll_locked(pll_locked),
+	.roz_fill(dbg_roz_fill), .roz_hit(dbg_roz_hit), .roz_pen_nz(dbg_roz_pen_nz)
+);
+`endif
 
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix;
