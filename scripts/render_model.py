@@ -393,6 +393,10 @@ def main():
     else:
         idx, opaque = LAYERS[a.layer](c)
         rgb = pal[idx]
+        # The RTL benches compare against this, not the PNG: one little-endian
+        # u16 palette index per pixel, row-major, 0xFFFF where the layer is
+        # transparent. scripts/compare_sim_layer.py reads it back.
+        np.where(opaque, idx, 0xFFFF).astype("<u2").tofile(c.d / f"model_{a.layer}.u16")
     out = c.d / f"model_{a.layer}.png"
     Image.fromarray(rgb).save(out)
 

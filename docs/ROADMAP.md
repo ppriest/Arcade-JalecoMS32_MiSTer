@@ -105,6 +105,15 @@ vblank copy), `p47aces` 1800 (ROZ simple mode), `gametngk` 3000 and 6000 (ROZ pe
 primask 0xfe shadows, non-square and >1 zooms, ROT270). What each frame covers, and what none does
 yet, is tabled in `docs/phase1_video.md`.
 
+**Phase 1 RTL: the CRTC, TX/BG, ROZ and sprite engines exist and match the model.** Each is a
+line (or, for sprites, frame) engine behind req/valid ROM ports and checked in simulation against
+the model's per-layer dump on every capture: TX/BG on all seven, ROZ on the two that use it, sprites
+on all seven, all 71,680 of 71,680 pixels, at ROM latency 12 and (tilemaps, ROZ) 40. Measured
+budgets: ROZ worst line 3,322 of 6,144 clocks; the sprite engine's heaviest captured frame takes
+35% of a frame into an ideal frame buffer. Status table and per-engine numbers in
+`docs/phase1_video.md`. Still to build: the sprite frame buffer's DDR3 transport, the mixer and
+the palette, then the top-level wiring and the first Quartus build with video in it.
+
 ## Game scope
 
 Twenty-one sets in `ms32.cpp`, all `MACHINE_IMPERFECT_GRAPHICS`, plus `f1superb` which is also

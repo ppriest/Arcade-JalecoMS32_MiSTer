@@ -9,6 +9,20 @@ engine below is verified by preloading a capture's dumps, rendering one frame, a
 
 Numbers not derived from the driver or a capture are marked as estimates.
 
+## Status
+
+| engine | RTL | bench | result |
+|---|---|---|---|
+| CRTC | `rtl/video/ms32_crtc.sv` | drives every bench below | MAME defaults; register path not yet exercised by a capture |
+| TX, BG | `rtl/video/ms32_tilemap.sv` | `sim/layers_tb` | pixel-exact on all seven captures, ROM latency 12 and 40, no overrun |
+| ROZ | `rtl/video/ms32_roz.sv` | `sim/layers_tb` | pixel-exact on both ROZ captures (simple and per-line); worst line 3,322 clk of 6,144 at latency 40 |
+| Sprites | `rtl/video/ms32_sprite.sv` | `sim/sprite_tb` | pixel-exact on all seven captures; heaviest frame `tetrisp-f4800`, 194 sprites, 37,840 pixel writes, 569,577 clk = 35% of a frame, at ROM latency 12 |
+| Sprite frame buffer (DDR3 transport, clear, line prefetch) | — | — | next |
+| Mixer, palette, brightness | — | — | after the frame buffer |
+
+`scripts/sim_layer_check.py <capture>` runs the benches and diffs each layer against the model's
+`model_<layer>.u16`; `--lat N` sets the ROM model's latency.
+
 ## What the hardware does per frame
 
 At the CRTC values every captured game programs (`hblank 64, hdisplay 320, vblank 39, vdisplay 224`
