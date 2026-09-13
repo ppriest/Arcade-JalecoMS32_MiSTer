@@ -86,10 +86,15 @@ def main():
                f"  <name>{NAMES.get(game, game)}</name>",
                f"  <setname>{game}</setname>",
                f"  <rbf>{RBF}</rbf>",
-               "  <mameversion>0286</mameversion>"]
+               "  <mameversion>0286</mameversion>",
+               # DSW at 0xFCC00010, low byte first (MS32.sv sw[0..3]). MAME's defaults for
+               # all three sets: every switch off except Language (bit 23) = English, 0.
+               f'  <switches default="FF,FF,7F,FF"></switches>']
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.
         key = KEY_INDEX[SET_KEY[game]]
-        xml.append(f'  <rom index="1"><part>{key:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]} -->')
+        mod = key | (0x80 if cap else 0)     # bit 7 holds the V70 for capture playback
+        xml.append(f'  <rom index="1"><part>{mod:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]}'
+                   f'{", CPU held" if cap else ""} -->')
         xml.append(f'  <rom index="0" zip="{game}.zip" md5="none">')
         pos = 0
         for region, base, rsize in MAP:

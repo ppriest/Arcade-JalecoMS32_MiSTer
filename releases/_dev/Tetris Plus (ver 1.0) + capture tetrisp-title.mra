@@ -7,7 +7,8 @@
   <setname>tetrisp</setname>
   <rbf>Arcade-JalecoMS32</rbf>
   <mameversion>0286</mameversion>
-  <rom index="1"><part>01</part></rom>   <!-- mod byte: key ss92046_01 -->
+  <switches default="FF,FF,7F,FF"></switches>
+  <rom index="1"><part>81</part></rom>   <!-- mod byte: key ss92046_01, CPU held -->
   <rom index="0" zip="tetrisp.zip" md5="none">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">

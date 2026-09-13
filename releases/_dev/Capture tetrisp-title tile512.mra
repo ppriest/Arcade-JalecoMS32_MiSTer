@@ -4,7 +4,7 @@
   <name>Capture tetrisp-title tile512</name>
   <setname>MS32</setname>
   <rbf>Arcade-JalecoMS32</rbf>
-  <rom index="1"><part>00</part></rom>
+  <rom index="1"><part>80</part></rom>   <!-- mod byte: bit 7 holds the V70 -->
   <rom index="2">
     <part>
 20000000200000002000000020000000200000002000000020000000200000002000000020000000200000002000000020000000200000002000000020000000

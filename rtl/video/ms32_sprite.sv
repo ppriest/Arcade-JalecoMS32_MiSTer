@@ -50,9 +50,13 @@ module ms32_sprite (
 	input  logic [11:0] hdisplay,
 	input  logic [11:0] vdisplay,
 
-	// object RAM (the vblank copy): u16 index, one-cycle synchronous read
+	// object RAM (the vblank copy): u16 index, one-cycle synchronous read.
+	// obj_ready low means the record at obj_addr is not readable yet (the
+	// copy is in DDR3 behind a window, ms32_objram): the record restarts.
 	output logic [14:0] obj_addr,
 	input  logic [15:0] obj_data,
+	input  logic        obj_ready,
+	output logic        obj_rd,
 
 	// sprite ROM, region-local byte address
 	output logic        rom_req,
@@ -121,6 +125,7 @@ module ms32_sprite (
 
 	assign rom_req = rom_req_r & ~rom_valid;
 	assign busy    = (state != S_IDLE);
+	assign obj_rd  = (state == S_READ) && (rd_cnt != 4'd0);
 
 	wire [31:0] rowsrc = flipy ? (srcendy - srcy - 32'd1) : srcy;
 	wire [31:0] pixsrc = flipx ? (srcendx - cursrcx - 32'd1) : cursrcx;
@@ -167,9 +172,13 @@ module ms32_sprite (
 					// eight words, two-cycle read latency
 					S_READ: begin
 						obj_addr <= {idx, rd_cnt[2:0]};
-						if (rd_cnt >= 4'd2) w[rd_cnt - 4'd2] <= obj_data;
-						if (rd_cnt == 4'd9) state <= S_SETUP;
-						rd_cnt <= rd_cnt + 4'd1;
+						if (rd_cnt != 4'd0 && !obj_ready) begin
+							rd_cnt <= 4'd0;                       // obj_addr now names this record; wait for it
+						end else begin
+							if (rd_cnt >= 4'd2) w[rd_cnt - 4'd2] <= obj_data;
+							if (rd_cnt == 4'd9) state <= S_SETUP;
+							rd_cnt <= rd_cnt + 4'd1;
+						end
 					end
 
 					S_SETUP: begin

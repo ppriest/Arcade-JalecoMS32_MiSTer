@@ -1201,6 +1201,15 @@ hierarchical access to the core's own `MCycle`/`TState`, not by "the test passes
   consumer the EXISTING port instead when the two can never collide (here the consumer only touched
   RAM with the CPU paused). Check `Block Memory Bits` per hierarchy node in the map report against
   the array's arithmetic size before assuming an unused port is free.
+  [MS32] The dual-clock form of the same thing: port A read/write on the CPU clock in one always
+  block and port B read on clk_sys in another inferred as two simple-dual-port copies of every
+  video RAM, 2.45 Mbit extra, although only one block writes. An explicitly instantiated
+  `altsyncram` in `BIDIR_DUAL_PORT` mode with two clocks and byte enables is one array
+  (`rtl/memory/dpram_dc.sv`).
+- **[MS32] Past about 90% of M10K, count blocks, not bits.** An M10K is 1024 words of up to 10
+  bits (or 256 of 40, 8192 of 1), so a 32,768-word 16-bit RAM is 64 blocks however many bits it
+  holds. The first fit with the CPU was 82% of block memory bits and still over 553 blocks. The
+  README's resource table lists blocks per RAM.
 - **A design can be BRAM-bound while logic sits at 40%.** Budget features in M10K blocks, not ALMs.
   Bit occupancy is the number that matters: no memory packs at 100%, so a design at ~95% of the
   device's block memory bits cannot be made to fit by repacking, only by removing memory. Repacking

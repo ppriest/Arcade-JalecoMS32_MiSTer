@@ -7,6 +7,10 @@
 // SDRAM backend serves; the frame buffer's DDRAM port goes straight to the
 // top level.
 //
+// The RAMs are dual-clock (dpram_dc): the CPU port reads and writes on
+// cpu_clk (ms32_cpu_sys), the engines read on clk. Registers arrive already
+// in clk, through ms32_cpu_sys's mailbox.
+//
 // Register writes arrive as (vreg_we, vreg_off, vreg_data): vreg_off is
 // the byte offset inside the 0xFCE00000 block and vreg_data the low
 // halfword the CPU wrote (every register here is 16-bit behind umask32):
@@ -26,14 +30,17 @@ module ms32_video (
 	input  logic [11:0] vreg_off,
 	input  logic [15:0] vreg_data,
 
-	// RAM write ports, u16 (or u8 for priority) index within the region
-	input  logic        txram_we,  input logic [12:0] txram_addr,  input logic [15:0] txram_wdata,
-	input  logic        bgram_we,  input logic [12:0] bgram_addr,  input logic [15:0] bgram_wdata,
-	input  logic        rozram_we, input logic [14:0] rozram_addr, input logic [15:0] rozram_wdata,
-	input  logic        lineram_we,input logic [10:0] lineram_addr,input logic [15:0] lineram_wdata,
-	input  logic        objram_we, input logic [14:0] objram_addr, input logic [15:0] objram_wdata,
-	input  logic        palram_we, input logic [15:0] palram_addr, input logic [15:0] palram_wdata,
-	input  logic        priram_we, input logic [12:0] priram_addr, input logic [7:0]  priram_wdata,
+	// CPU ports of the RAMs, on cpu_clk: u16 (or u8 for priority) index within
+	// the region, byte-lane write enables, one-clock synchronous read
+	input  logic        cpu_clk,
+	input  logic [15:0] cpu_wdata,
+	input  logic [12:0] txram_addr,   input logic txram_wel,   input logic txram_weh,   output logic [15:0] txram_rdata,
+	input  logic [12:0] bgram_addr,   input logic bgram_wel,   input logic bgram_weh,   output logic [15:0] bgram_rdata,
+	input  logic [14:0] rozram_addr,  input logic rozram_wel,  input logic rozram_weh,  output logic [15:0] rozram_rdata,
+	input  logic [10:0] lineram_addr, input logic lineram_wel, input logic lineram_weh, output logic [15:0] lineram_rdata,
+	input  logic [14:0] objram_addr,  input logic objram_wel,  input logic objram_weh,  output logic [15:0] objram_rdata,
+	input  logic [15:0] palram_addr,  input logic palram_wel,  input logic palram_weh,  output logic [15:0] palram_rdata,
+	input  logic [12:0] priram_addr,  input logic priram_we,                             output logic [7:0]  priram_rdata,
 
 	// tile ROMs, region-local byte addresses, 8-byte granules
 	output logic        tx_rom_req,  output logic [23:0] tx_rom_addr,  input logic tx_rom_valid,  input logic [63:0] tx_rom_data,
@@ -112,10 +119,14 @@ module ms32_video (
 	logic [14:0] roz_va;
 	logic [10:0] roz_la;
 	logic [15:0] tx_vd, bg_vd, roz_vd, roz_ld;
-	dpram #(.ADDR_WIDTH(13)) u_txram (.clk(clk), .a_addr(txram_addr), .a_wel(txram_we), .a_weh(txram_we), .a_wdata(txram_wdata), .a_rdata(), .b_addr(tx_va), .b_re(1'b1), .b_rdata(tx_vd));
-	dpram #(.ADDR_WIDTH(13)) u_bgram (.clk(clk), .a_addr(bgram_addr), .a_wel(bgram_we), .a_weh(bgram_we), .a_wdata(bgram_wdata), .a_rdata(), .b_addr(bg_va), .b_re(1'b1), .b_rdata(bg_vd));
-	dpram #(.ADDR_WIDTH(15)) u_rozram (.clk(clk), .a_addr(rozram_addr), .a_wel(rozram_we), .a_weh(rozram_we), .a_wdata(rozram_wdata), .a_rdata(), .b_addr(roz_va), .b_re(1'b1), .b_rdata(roz_vd));
-	dpram #(.ADDR_WIDTH(11)) u_lineram (.clk(clk), .a_addr(lineram_addr), .a_wel(lineram_we), .a_weh(lineram_we), .a_wdata(lineram_wdata), .a_rdata(), .b_addr(roz_la), .b_re(1'b1), .b_rdata(roz_ld));
+	dpram_dc #(.ADDR_WIDTH(13)) u_txram (.clk_a(cpu_clk), .a_addr(txram_addr), .a_wel(txram_wel), .a_weh(txram_weh), .a_wdata(cpu_wdata), .a_rdata(txram_rdata),
+		.clk_b(clk), .b_addr(tx_va), .b_re(1'b1), .b_rdata(tx_vd));
+	dpram_dc #(.ADDR_WIDTH(13)) u_bgram (.clk_a(cpu_clk), .a_addr(bgram_addr), .a_wel(bgram_wel), .a_weh(bgram_weh), .a_wdata(cpu_wdata), .a_rdata(bgram_rdata),
+		.clk_b(clk), .b_addr(bg_va), .b_re(1'b1), .b_rdata(bg_vd));
+	dpram_dc #(.ADDR_WIDTH(15)) u_rozram (.clk_a(cpu_clk), .a_addr(rozram_addr), .a_wel(rozram_wel), .a_weh(rozram_weh), .a_wdata(cpu_wdata), .a_rdata(rozram_rdata),
+		.clk_b(clk), .b_addr(roz_va), .b_re(1'b1), .b_rdata(roz_vd));
+	dpram_dc #(.ADDR_WIDTH(11)) u_lineram (.clk_a(cpu_clk), .a_addr(lineram_addr), .a_wel(lineram_wel), .a_weh(lineram_weh), .a_wdata(cpu_wdata), .a_rdata(lineram_rdata),
+		.clk_b(clk), .b_addr(roz_la), .b_re(1'b1), .b_rdata(roz_ld));
 
 	// ---------------------------------------------------------- tile engines
 	logic [7:0] tx_pen, bg_pen, roz_pen;
@@ -155,14 +166,18 @@ module ms32_video (
 	);
 
 	// --------------------------------------------------------------- sprites
-	logic        copy_done;
+	logic        copy_done, obj_ready, obj_rd;
 	logic [14:0] obj_addr;
 	logic [15:0] obj_data;
+	logic        j_req, j_we, j_beat, j_done;
+	logic [27:3] j_addr;
+	logic [63:0] j_din, j_dout;
 	ms32_objram u_objram (
 		.clk(clk), .reset(reset),
-		.cpu_addr(objram_addr), .cpu_wel(objram_we), .cpu_weh(objram_we), .cpu_wdata(objram_wdata), .cpu_rdata(),
+		.cpu_clk(cpu_clk), .cpu_addr(objram_addr), .cpu_wel(objram_wel), .cpu_weh(objram_weh), .cpu_wdata(cpu_wdata), .cpu_rdata(objram_rdata),
 		.frame_start(vblank_ev), .copy_done(copy_done), .copying(),
-		.obj_addr(obj_addr), .obj_data(obj_data)
+		.reverse(~spr_ctrl10[15]), .obj_rd(obj_rd), .obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready),
+		.j_req(j_req), .j_we(j_we), .j_addr(j_addr), .j_din(j_din), .j_beat(j_beat), .j_dout(j_dout), .j_done(j_done)
 	);
 
 	logic        fb_we, fb_ready, spr_done;
@@ -172,7 +187,7 @@ module ms32_video (
 	ms32_sprite u_spr (
 		.clk(clk), .reset(reset),
 		.frame_start(copy_done), .reverse(~spr_ctrl10[15]), .hdisplay(hdisplay), .vdisplay(vdisplay),
-		.obj_addr(obj_addr), .obj_data(obj_data),
+		.obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready), .obj_rd(obj_rd),
 		.rom_req(spr_rom_req), .rom_addr(spr_rom_addr), .rom_valid(spr_rom_valid), .rom_data(spr_rom_data),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready),
 		.busy(), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn)
@@ -182,6 +197,7 @@ module ms32_video (
 		.frame_start(vblank_ev), .line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready), .flush(spr_done),
 		.pix(spr_pix),
+		.j_req(j_req), .j_we(j_we), .j_addr(j_addr), .j_din(j_din), .j_beat(j_beat), .j_dout(j_dout), .j_done(j_done),
 		.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 		.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
 		.rd_overrun(fb_overrun), .rd_overrun_ev(), .wr_stall_cycles()
@@ -191,11 +207,18 @@ module ms32_video (
 	// palette: 0x8000 entries x 2 u16; entry i is u16 words 2i (RG) and 2i+1 (B)
 	logic [14:0] pal_addr;
 	logic [15:0] pal_w0, pal_w1;
-	dpram #(.ADDR_WIDTH(15)) u_pal0 (.clk(clk), .a_addr(palram_addr[15:1]), .a_wel(palram_we && !palram_addr[0]), .a_weh(palram_we && !palram_addr[0]), .a_wdata(palram_wdata), .a_rdata(), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w0));
-	dpram #(.ADDR_WIDTH(15)) u_pal1 (.clk(clk), .a_addr(palram_addr[15:1]), .a_wel(palram_we &&  palram_addr[0]), .a_weh(palram_we &&  palram_addr[0]), .a_wdata(palram_wdata), .a_rdata(), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w1));
+	logic [15:0] pal_r0, pal_r1;
+	logic        pal_odd_q;
+	dpram_dc #(.ADDR_WIDTH(15)) u_pal0 (.clk_a(cpu_clk), .a_addr(palram_addr[15:1]), .a_wel(palram_wel && !palram_addr[0]), .a_weh(palram_weh && !palram_addr[0]), .a_wdata(cpu_wdata), .a_rdata(pal_r0),
+		.clk_b(clk), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w0));
+	dpram_dc #(.ADDR_WIDTH(15)) u_pal1 (.clk_a(cpu_clk), .a_addr(palram_addr[15:1]), .a_wel(palram_wel &&  palram_addr[0]), .a_weh(palram_weh &&  palram_addr[0]), .a_wdata(cpu_wdata), .a_rdata(pal_r1),
+		.clk_b(clk), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w1));
+	always_ff @(posedge cpu_clk) pal_odd_q <= palram_addr[0];
+	assign palram_rdata = pal_odd_q ? pal_r1 : pal_r0;
 	logic [12:0] pri_addr;
 	logic [7:0]  pri_data;
-	dpram #(.ADDR_WIDTH(13), .DATA_WIDTH(8)) u_priram (.clk(clk), .a_addr(priram_addr), .a_wel(priram_we), .a_weh(1'b0), .a_wdata(priram_wdata), .a_rdata(), .b_addr(pri_addr), .b_re(1'b1), .b_rdata(pri_data));
+	dpram_dc #(.ADDR_WIDTH(13), .DATA_WIDTH(8)) u_priram (.clk_a(cpu_clk), .a_addr(priram_addr), .a_wel(priram_we), .a_weh(1'b0), .a_wdata(cpu_wdata[7:0]), .a_rdata(priram_rdata),
+		.clk_b(clk), .b_addr(pri_addr), .b_re(1'b1), .b_rdata(pri_data));
 
 	ms32_mixer u_mix (
 		.clk(clk), .reset(reset), .frame_start(vblank_ev),

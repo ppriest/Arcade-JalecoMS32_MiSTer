@@ -6,7 +6,7 @@
     python scripts/run_verilator.py capload_tb --rebuild +OLD=1
 
 Verilator, g++ and make come from msys64 (E:/msys64/mingw64, E:/msys64/usr).
-The model is built under build/verilator/<bench> and run from the repository
+The model is built under simout/verilator/<bench> and run from the repository
 root, so the bench's relative paths (roms/, debug/, simout/) resolve as they
 do under scripts/run_sim.sh. The top module is the file.f's last entry's
 module, named tb_<bench without _tb>. Plusargs pass through unchanged.
@@ -31,7 +31,7 @@ def main():
     srcs = [ln.strip() for ln in (REPO / "sim" / bench / "files.f").read_text(encoding="utf-8").splitlines()
             if ln.strip() and not ln.startswith("#")]
     top = "tb_" + bench.removesuffix("_tb")
-    obj = REPO / "build" / "verilator" / bench
+    obj = REPO / "simout" / "verilator" / bench     # not build/: that is the Quartus worktree
     exe = obj / f"V{top}.exe"
 
     env = dict(os.environ)

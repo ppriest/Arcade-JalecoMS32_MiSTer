@@ -294,7 +294,7 @@ the two simulators is a finding, not a nuisance — the `always @*` time-zero en
 is one.
 
 Core-level benches outside the CPU suite use `scripts/run_verilator.py <bench> [+plusargs]`, which
-builds `sim/<bench>/files.f` into `build/verilator/<bench>` and reruns without rebuilding while no
+builds `sim/<bench>/files.f` into `simout/verilator/<bench>` and reruns without rebuilding while no
 source has changed. `sim/capload_tb` (the capture streamed on ioctl index 2 with reset held, as
 MiSTer holds it) is the first; build and run together take about 6 s. No JTAG lock is needed around
 Verilator.

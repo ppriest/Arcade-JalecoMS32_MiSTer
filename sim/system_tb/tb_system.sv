@@ -1,63 +1,47 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-//  Capture load the way the board does it: debug/<CAP>/capture.bin streamed
-//  byte by byte on ioctl index 2 through ms32_capture_loader, with the core
-//  reset held for the whole download as MiSTer holds RESET and ioctl_wait
-//  honoured. The loader's writes cross into ms32_core's CPU domain (20 MHz
-//  here, as on the board) and go through the CPU address decode with the
-//  V70 held; ms32_core runs from the loader's sys_reset, as in MS32.sv. The
-//  frame after the load is written for scripts/compare_sim_rgb.py.
+//  The whole board running a game: ms32_core (V70 and memory map on
+//  clk_cpu, video on clk_sys) with the program, tile and sprite ROMs behind
+//  latency models and the sprite frame buffer behind the DDRAM model. No
+//  replay: interrupts come from the CRTC and the system controller, inputs
+//  and DIPs are constants (MAME's defaults for the set).
 //
-//  sim/video_tb loads the same state through the video block's ports with
-//  reset low, so it cannot see a write dropped by reset; this bench can.
-//  +OLD=1 drives ms32_core from the composite reset instead (the wiring
-//  before the fix) and must fail -- the negative control.
+//      python scripts/run_verilator.py system_tb +GAME=tetrisp +FRAME=1200 +OUT=simout/system-tetrisp
 //
-//      python scripts/run_verilator.py capload_tb +CAP=tetrisp-title +GAME=tetrisp
+//  +FRAME=N   write frame N (counted from reset, as MAME's frame numbers
+//             are) to <OUT>/sim_rgb.txt for scripts/compare_sim_rgb.py
+//  +TRACE=N   log the first N bus accesses to debug/<GAME>-boot/rtl_sys.trace
+//             in the MAME tap format, for scripts/compare_boot_trace.py
+//  +DSW=hex   the DIP word (default FF7FFFFF, what MAME's tetrisp read)
+//  +LAT=N     ROM model latency in clk_sys clocks (default 12)
 `timescale 1ns/1ps
 
-module tb_capload;
+module tb_system;
 
 reg clk = 0;
 always #5.208 clk = ~clk;       // clk_sys, 96 MHz
 reg clk_cpu = 0;
 always #25 clk_cpu = ~clk_cpu;  // clk_cpu, 20 MHz
-reg base_reset = 1;
+reg reset = 1, cpu_run = 0;
 
-string CAP, GAME, OUTDIR;
-integer LAT, OLD;
-
-// ------------------------------------------------------------- ioctl side
-reg         ioctl_download = 0, ioctl_wr = 0;
-reg  [15:0] ioctl_index = 0;
-reg  [26:0] ioctl_addr = 0;
-reg   [7:0] ioctl_dout = 0;
-wire        ioctl_wait;
-wire        reset = base_reset | ioctl_download;     // MS32.sv's composite reset, as far as it matters here
-
-wire        sys_reset, ld_req, ld_ack;
-wire [31:0] ld_addr, ld_data;
-wire [3:0]  ld_be;
-ms32_capture_loader u_capload (
-	.clk(clk), .reset(reset),
-	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index), .ioctl_wr(ioctl_wr),
-	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
-	.sys_reset(sys_reset),
-	.ld_req(ld_req), .ld_addr(ld_addr), .ld_be(ld_be), .ld_data(ld_data), .ld_ack(ld_ack)
-);
+string  GAME, OUTDIR;
+integer LAT, FRAME, TRACE;
+reg [31:0] DSW;
 
 // ------------------------------------------------------------- ROMs
+reg [7:0]  prgrom [0:(1 << 21) - 1];
 reg [7:0]  txrom  [0:(1 << 19) - 1];
 reg [7:0]  bgrom  [0:(1 << 22) - 1];
 reg [7:0]  rozrom [0:(1 << 22) - 1];
 reg [7:0]  sprrom [0:(1 << 24) - 1];
 integer    txrom_mask, bgrom_mask, rozrom_mask, sprrom_mask;
 
-wire        tx_req, bg_req, rz_req, sp_req;
+wire        pg_req, tx_req, bg_req, rz_req, sp_req;
+wire [17:0] pg_addr;
 wire [23:0] tx_addr, bg_addr, rz_addr;
 wire [27:0] sp_addr;
-reg         tx_valid = 0, bg_valid = 0, rz_valid = 0, sp_valid = 0;
-reg  [63:0] tx_data, bg_data, rz_data, sp_data;
+reg         pg_valid = 0, tx_valid = 0, bg_valid = 0, rz_valid = 0, sp_valid = 0;
+reg  [63:0] pg_data, tx_data, bg_data, rz_data, sp_data;
 
 wire        DDRAM_BUSY, DDRAM_RD, DDRAM_WE, DDRAM_DOUT_READY;
 wire [7:0]  DDRAM_BURSTCNT, DDRAM_BE;
@@ -67,13 +51,13 @@ wire [63:0] DDRAM_DIN, DDRAM_DOUT;
 wire        ce_pix, hblank, vblank, hsync, vsync, vblank_ev;
 wire [7:0]  r, g, b;
 wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
+wire [31:0] pc;
 
-// the V70 stays in reset: capture playback
 ms32_core u_core (
-	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(OLD != 0 ? reset : sys_reset), .cpu_run(1'b0), .invert_lines(1'b0),
-	.inputs(32'hFFFF_FFFF), .dsw(32'hFFFF_FFFF),
-	.ld_req(ld_req), .ld_addr(ld_addr), .ld_be(ld_be), .ld_data(ld_data), .ld_ack(ld_ack),
-	.prg_req(), .prg_addr(), .prg_valid(1'b0), .prg_data(64'd0),
+	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(reset), .cpu_run(cpu_run), .invert_lines(1'b0),
+	.inputs(32'hFFFF_FFFF), .dsw(DSW),
+	.ld_req(1'b0), .ld_addr(32'd0), .ld_be(4'd0), .ld_data(32'd0), .ld_ack(),
+	.prg_req(pg_req),  .prg_addr(pg_addr), .prg_valid(pg_valid), .prg_data(pg_data),
 	.tx_req(tx_req),   .tx_addr(tx_addr),  .tx_valid(tx_valid),  .tx_data(tx_data),
 	.bg_req(bg_req),   .bg_addr(bg_addr),  .bg_valid(bg_valid),  .bg_data(bg_data),
 	.roz_req(rz_req),  .roz_addr(rz_addr), .roz_valid(rz_valid), .roz_data(rz_data),
@@ -84,14 +68,19 @@ ms32_core u_core (
 	.vblank_ev(vblank_ev),
 	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
-	.dbg_roz_fill(), .dbg_roz_hit(), .dbg_roz_pen_nz(), .dbg_pc()
+	.dbg_roz_fill(), .dbg_roz_hit(), .dbg_roz_pen_nz(), .dbg_pc(pc)
 );
 
 // ------------------------------------------------------------ ROM models
-// LAT clocks from req to valid, one request at a time per port (sim/video_tb's model).
-integer tx_cnt = 0, bg_cnt = 0, rz_cnt = 0, sp_cnt = 0, i;
-reg [27:0] tx_la, bg_la, rz_la, sp_la;
+// LAT clocks from req to valid, one request at a time per port. The program
+// ROM port's address is a granule index (x8 bytes).
+integer pg_cnt = 0, tx_cnt = 0, bg_cnt = 0, rz_cnt = 0, sp_cnt = 0, i;
+reg [27:0] pg_la, tx_la, bg_la, rz_la, sp_la;
 always @(posedge clk) begin
+	pg_valid <= 0;
+	if (pg_cnt == 0) begin if (pg_req) begin pg_la <= {7'd0, pg_addr, 3'd0}; pg_cnt <= LAT; end end
+	else if (pg_cnt == 1) begin for (i = 0; i < 8; i = i + 1) pg_data[8*i +: 8] <= prgrom[pg_la[20:0] + i]; pg_valid <= 1; pg_cnt <= 0; end
+	else pg_cnt <= pg_cnt - 1;
 	tx_valid <= 0;
 	if (tx_cnt == 0) begin if (tx_req) begin tx_la <= {4'd0, tx_addr}; tx_cnt <= LAT; end end
 	else if (tx_cnt == 1) begin for (i = 0; i < 8; i = i + 1) tx_data[8*i +: 8] <= txrom[(tx_la + i) & txrom_mask]; tx_valid <= 1; tx_cnt <= 0; end
@@ -149,68 +138,75 @@ always @(posedge clk) begin
 	end
 end
 
-// ------------------------------------------------------------- frame capture
-reg [23:0] out [0:320*224-1];
-integer frame = -1;      // counts from the end of the load
-always @(posedge clk) if (vblank_ev && frame >= 0) frame <= frame + 1;
-always @(posedge clk) begin
-	if (ce_pix && !hblank && !vblank && frame == 3 && u_core.u_video.hcnt < 320 && u_core.u_video.vcnt < 224)
-		out[u_core.u_video.vcnt * 320 + u_core.u_video.hcnt] <= {r, g, b};
+// ------------------------------------------------------------- bus trace
+integer ftr = 0, n_tr = 0;
+wire [31:0] tr_mask = {{8{u_core.u_sys.m_be[3]}}, {8{u_core.u_sys.m_be[2]}}, {8{u_core.u_sys.m_be[1]}}, {8{u_core.u_sys.m_be[0]}}};
+always @(posedge clk_cpu) begin
+	if (ftr != 0 && u_core.u_sys.m_ack && !u_core.u_sys.ld_owns && n_tr < TRACE) begin
+		n_tr = n_tr + 1;
+		if (u_core.u_sys.m_we)
+			$fdisplay(ftr, "%0d\tw\t%08X\t%08X\t%08X", n_tr, u_core.u_sys.a, tr_mask, u_core.u_sys.m_wdata);
+		else
+			$fdisplay(ftr, "%0d\tr\t%08X\t%08X\t%08X", n_tr, u_core.u_sys.a, tr_mask, u_core.u_sys.m_rdata);
+		if (n_tr == TRACE) begin $fclose(ftr); ftr = 0; $display("trace: %0d accesses written", TRACE); end
+	end
 end
 
-// ------------------------------------------------------------- stimulus
-reg [7:0] blob [0:(1 << 20) - 1];
-integer n, k, fd, blob_len;
+// ------------------------------------------------------------- frames
+reg [23:0] out [0:320*224-1];
+integer frame = 0, irqs = 0;
+always @(posedge clk) if (vblank_ev) frame <= frame + 1;
+always @(posedge clk_cpu) if (u_core.u_sys.irq_ack) irqs <= irqs + 1;
+always @(posedge clk) begin
+	if (ce_pix && !hblank && !vblank && frame == FRAME && u_core.u_video.hcnt < 320 && u_core.u_video.vcnt < 224)
+		out[u_core.u_video.vcnt * 320 + u_core.u_video.hcnt] <= {r, g, b};
+end
+always @(posedge clk) if (vblank_ev && (frame % 60) == 59)
+	$display("frame %0d: pc %08x, %0d accesses, %0d interrupts, cache %0d hits %0d misses, overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d",
+	         frame + 1, pc, u_core.u_sys.dbg_accesses, irqs, u_core.u_sys.dbg_cache_hits, u_core.u_sys.dbg_cache_misses,
+	         tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr);
 
-// hps_io's pacing: one ioctl_wr pulse, then the next only once ioctl_wait is
-// low: the loader holds it while a word crosses into the CPU domain.
-task send(input integer addr, input [7:0] d);
-	begin
-		ioctl_addr <= addr[26:0]; ioctl_dout <= d; ioctl_wr <= 1;
-		@(posedge clk);
-		ioctl_wr <= 0;
-		@(posedge clk);
-		while (ioctl_wait) @(posedge clk);
-	end
-endtask
-
+// ------------------------------------------------------------- run
+integer n, k, fd;
 initial begin
-	if (!$value$plusargs("CAP=%s", CAP))   CAP = "tetrisp-title";
-	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
-	if (!$value$plusargs("LAT=%d", LAT))   LAT = 12;
-	if (!$value$plusargs("OLD=%d", OLD))   OLD = 0;
-	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/", CAP};
+	if (!$value$plusargs("GAME=%s", GAME))  GAME = "tetrisp";
+	if (!$value$plusargs("LAT=%d", LAT))    LAT = 12;
+	if (!$value$plusargs("FRAME=%d", FRAME)) FRAME = 60;
+	if (!$value$plusargs("TRACE=%d", TRACE)) TRACE = 0;
+	if (!$value$plusargs("DSW=%h", DSW))    DSW = 32'hFF7F_FFFF;
+	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/system-", GAME};
 
-	fd = $fopen({"roms/", GAME, "/txtiles_dec.bin"}, "rb"); if (fd == 0) begin $display("FATAL no txtiles_dec.bin"); $finish; end
-	n = $fread(txrom, fd); $fclose(fd); txrom_mask = n - 1;
+	for (k = 0; k < (1 << 21); k = k + 1) prgrom[k] = 8'hCD;
+	fd = $fopen({"roms/", GAME, "/maincpu.bin"}, "rb"); if (fd == 0) begin $display("FATAL no maincpu.bin"); $finish; end
+	n = $fread(prgrom, fd); $fclose(fd);
+	fd = $fopen({"roms/", GAME, "/txtiles_dec.bin"}, "rb"); n = $fread(txrom, fd); $fclose(fd); txrom_mask = n - 1;
 	fd = $fopen({"roms/", GAME, "/bgtiles_dec.bin"}, "rb"); n = $fread(bgrom, fd); $fclose(fd); bgrom_mask = n - 1;
 	fd = $fopen({"roms/", GAME, "/roztiles.bin"}, "rb");    n = $fread(rozrom, fd); $fclose(fd); rozrom_mask = n - 1;
 	fd = $fopen({"roms/", GAME, "/sprite.bin"}, "rb");      n = $fread(sprrom, fd); $fclose(fd); sprrom_mask = n - 1;
 	if ((n & (n - 1)) != 0) sprrom_mask = (1 << $clog2(n)) - 1;
-	fd = $fopen({"debug/", CAP, "/capture.bin"}, "rb"); if (fd == 0) begin $display("FATAL no capture.bin"); $finish; end
-	blob_len = $fread(blob, fd); $fclose(fd);
 	for (k = 0; k < 262144; k = k + 1) ddr[k] = 64'd0;
 	for (k = 0; k < 320*224; k = k + 1) out[k] = 24'h000000;
-	$display("%s: capture blob %0d bytes, LAT %0d, %s", CAP, blob_len, LAT, OLD != 0 ? "OLD wiring (video in the composite reset)" : "video_reset");
+	$display("%s: reset vector bytes %02x %02x %02x %02x, frame %0d, LAT %0d, DSW %08x",
+	         GAME, prgrom[21'h1FFFF0], prgrom[21'h1FFFF1], prgrom[21'h1FFFF2], prgrom[21'h1FFFF3], FRAME, LAT, DSW);
+	if (TRACE > 0) begin
+		ftr = $fopen({"debug/", GAME, "-boot/rtl_sys.trace"}, "w");
+		$fdisplay(ftr, "# RTL bus accesses from reset, in order (%s, system bench).", GAME);
+		$fdisplay(ftr, "# seq\trw\taddr\tmask\tdata");
+	end
 
-	repeat (20) @(posedge clk);
-	base_reset = 0;
-	repeat (20) @(posedge clk);
+	repeat (40) @(posedge clk);
+	reset = 0;
+	repeat (40) @(posedge clk);
+	cpu_run = 1;
 
-	// MiSTer sequence: the download asserts reset for its whole length
-	ioctl_index <= 16'd2; ioctl_download <= 1;
-	repeat (8) @(posedge clk);
-	for (k = 0; k < blob_len; k = k + 1) send(k, blob[k]);
-	repeat (8) @(posedge clk);
-	ioctl_download <= 0;
-	frame = 0;
-
-	wait (frame == 4);
+	wait (frame == FRAME + 1);
 	@(posedge clk);
 	fd = $fopen({OUTDIR, "/sim_rgb.txt"}, "w"); if (fd == 0) begin $display("FATAL cannot write to %s", OUTDIR); $finish; end
 	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%06x\n", out[k]);
 	$fclose(fd);
-	$display("frame written to %s; overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d bad_primask=%0d", OUTDIR, tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm);
+	$display("frame %0d written to %s; pc %08x, %0d accesses, %0d interrupts; overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d bad_primask=%0d",
+	         FRAME, OUTDIR, pc, u_core.u_sys.dbg_accesses, irqs, tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm);
+	if (ftr != 0) $fclose(ftr);
 	$finish;
 end
 

@@ -1,6 +1,13 @@
 derive_pll_clocks
 derive_clock_uncertainty
 
+# clk_cpu (general[1], 20 MHz, the V70's domain) and clk_sys (general[0],
+# 96 MHz) share the VCO but no usable edge relationship: every signal that
+# crosses goes through rtl/cpu/ms32_cdc.sv, so the two are asynchronous.
+set clk_sys_pll [get_clocks {*pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
+set clk_cpu_pll [get_clocks {*pll|pll_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}]
+set_clock_groups -asynchronous -group $clk_cpu_pll -group $clk_sys_pll
+
 # SDRAM: the MT48LC16M16 on the daughterboard, clocked by the PLL's third
 # output (clk_sys shifted 180 degrees). Constraints carried over from the
 # Seta core, which took them from Psikyo, where they were proven on hardware.

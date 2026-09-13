@@ -31,6 +31,10 @@
 //
 // Pixel (x, y) of bank b lives at byte BASE + b*0x40000 + y*640 + x*2,
 // little-endian, {pri, colour, pen}; 0 means empty.
+//
+// A fourth job shares the port: j_*, 128-beat read or write bursts for the
+// object RAM copy (ms32_objram), served after the line reads and before the
+// clears and the sprite words.
 module ms32_sprite_fb #(
 	parameter logic [27:0] BASE = 28'h1000000   // byte offset inside the 0x30000000 window
 ) (
@@ -54,6 +58,15 @@ module ms32_sprite_fb #(
 
 	// the sprite pixel at dot hcnt
 	output logic [15:0] pix,
+
+	// object RAM copy jobs (ms32_objram)
+	input  logic        j_req,
+	input  logic        j_we,
+	input  logic [27:3] j_addr,
+	input  logic [63:0] j_din,
+	output logic        j_beat,
+	output logic [63:0] j_dout,
+	output logic        j_done,
 
 	// DDRAM
 	input  logic        DDRAM_BUSY,
@@ -160,20 +173,24 @@ module ms32_sprite_fb #(
 	typedef enum logic [1:0] {D_IDLE, D_RD, D_WR} dstate_t;
 	dstate_t dstate;
 	logic       issued;
-	logic [1:0] owner;                      // 1 read, 2 clear, 3 sprite
-	logic [6:0] beat;                       // beats done in the current burst
+	logic [2:0] owner;                      // 1 read, 2 clear, 3 sprite, 4 object job
+	logic [7:0] beat;                       // beats done in the current burst
 	logic [7:0] nbeats;
+	logic [63:0] din_q;
 
 	assign DDRAM_BURSTCNT = nbeats;
 	assign DDRAM_RD = (dstate == D_RD) && !issued && !DDRAM_BUSY;
 	assign DDRAM_WE = (dstate == D_WR) && !issued;
+	assign DDRAM_DIN = (owner == 3'd4) ? j_din : din_q;
 
 	wire want_rd  = (rstate == R_READ);
+	wire want_job = j_req;
 	wire want_clr = (rstate == R_CLEAR);
 	wire want_spr = pend_valid;
 	assign rd_issue   = (dstate == D_IDLE) && want_rd;
-	assign clr_issue  = (dstate == D_IDLE) && !want_rd && want_clr;
-	assign pend_issue = (dstate == D_IDLE) && !want_rd && !want_clr && want_spr;
+	wire   job_issue  = (dstate == D_IDLE) && !want_rd && want_job;
+	assign clr_issue  = (dstate == D_IDLE) && !want_rd && !want_job && want_clr;
+	assign pend_issue = (dstate == D_IDLE) && !want_rd && !want_job && !want_clr && want_spr;
 
 	// A read beat is DOUT_READY, BUSY or not: readdatavalid is independent
 	// of waitrequest in Avalon-MM, and a bridge that raised BUSY on the last
@@ -181,50 +198,57 @@ module ms32_sprite_fb #(
 	// that, and this phy hung at beat 79 while gated on !BUSY).
 	wire rd_beat   = (dstate == D_RD) && issued && DDRAM_DOUT_READY;
 	wire wr_beat   = (dstate == D_WR) && !issued && !DDRAM_BUSY;
-	wire last_beat = ({1'b0, beat} == nbeats - 8'd1);
+	wire last_beat = (beat == nbeats - 8'd1);
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			dstate <= D_IDLE;
 			issued <= 1'b0;
-			beat   <= 7'd0;
+			beat   <= 8'd0;
 			nbeats <= 8'd1;
+			owner  <= 3'd0;
 		end else begin
 			case (dstate)
 				D_IDLE: begin
 					issued <= 1'b0;
-					beat   <= 7'd0;
+					beat   <= 8'd0;
 					if (rd_issue) begin
 						DDRAM_ADDR <= {4'b0011, r_pa[27:3]};
 						nbeats     <= 8'd80;
-						owner      <= 2'd1;
+						owner      <= 3'd1;
 						dstate     <= D_RD;
+					end else if (job_issue) begin
+						DDRAM_ADDR <= {4'b0011, j_addr};
+						DDRAM_BE   <= 8'hFF;
+						nbeats     <= 8'd128;
+						owner      <= 3'd4;
+						dstate     <= j_we ? D_WR : D_RD;
 					end else if (clr_issue) begin
 						DDRAM_ADDR <= {4'b0011, r_pa[27:3]};
-						DDRAM_DIN  <= 64'd0;
+						din_q      <= 64'd0;
 						DDRAM_BE   <= 8'hFF;
 						nbeats     <= 8'd80;
-						owner      <= 2'd2;
+						owner      <= 3'd2;
 						dstate     <= D_WR;
 					end else if (pend_issue) begin
 						DDRAM_ADDR <= {4'b0011, pend_addr};
-						DDRAM_DIN  <= pend_data;
+						din_q      <= pend_data;
 						DDRAM_BE   <= pend_be;
 						nbeats     <= 8'd1;
-						owner      <= 2'd3;
+						owner      <= 3'd3;
 						dstate     <= D_WR;
 					end
 				end
 				D_RD: begin
 					if (!issued && !DDRAM_BUSY) issued <= 1'b1;   // RD pulsed this cycle
 					if (rd_beat) begin
-						beat <= beat + 7'd1;
+						beat <= beat + 8'd1;
 						if (last_beat) dstate <= D_IDLE;
 					end
 				end
 				D_WR: begin
 					if (wr_beat) begin
-						beat <= beat + 7'd1;
+						beat <= beat + 8'd1;
 						if (last_beat) issued <= 1'b1;             // WE drops next cycle
 					end
 					if (issued && !DDRAM_BUSY) dstate <= D_IDLE;
@@ -234,8 +258,12 @@ module ms32_sprite_fb #(
 		end
 	end
 
-	wire rd_done  = rd_beat;                                  // one word of the line
-	wire clr_done = wr_beat && (owner == 2'd2);
+	wire rd_done  = rd_beat && (owner == 3'd1);                // one word of the line
+	wire clr_done = wr_beat && (owner == 3'd2);
+
+	assign j_beat = (owner == 3'd4) && (rd_beat || wr_beat);
+	assign j_dout = DDRAM_DOUT;
+	assign j_done = (owner == 3'd4) && ((rd_beat && last_beat) || (dstate == D_WR && issued && !DDRAM_BUSY));
 
 	// line buffer write: word r_word of the line = pixels 4*r_word .. +3
 	logic        lb_we;

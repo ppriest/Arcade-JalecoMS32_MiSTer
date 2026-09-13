@@ -46,7 +46,7 @@ wire [12:0] drawn;
 ms32_sprite u_spr (
 	.clk(clk), .reset(reset),
 	.frame_start(frame_start), .reverse(~sprctrl[4][15]), .hdisplay(12'd320), .vdisplay(12'd224),
-	.obj_addr(obj_addr), .obj_data(obj_data),
+	.obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(1'b1), .obj_rd(),
 	.rom_req(rom_req), .rom_addr(rom_addr), .rom_valid(rom_valid), .rom_data(rom_data),
 	.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(1'b1),
 	.busy(busy), .frame_done(done), .frame_overrun(overrun), .frame_cycles(cycles), .sprites_drawn(drawn)

@@ -58,13 +58,14 @@ wire [12:0] spr_drawn;
 ms32_video u_video (
 	.clk(clk), .reset(reset),
 	.vreg_we(vreg_we), .vreg_off(vreg_off), .vreg_data(vreg_data),
-	.txram_we(txram_we),   .txram_addr(ram_addr[12:0]),   .txram_wdata(ram_wdata),
-	.bgram_we(bgram_we),   .bgram_addr(ram_addr[12:0]),   .bgram_wdata(ram_wdata),
-	.rozram_we(rozram_we), .rozram_addr(ram_addr[14:0]),  .rozram_wdata(ram_wdata),
-	.lineram_we(lineram_we), .lineram_addr(ram_addr[10:0]), .lineram_wdata(ram_wdata),
-	.objram_we(objram_we), .objram_addr(ram_addr[14:0]),  .objram_wdata(ram_wdata),
-	.palram_we(palram_we), .palram_addr(ram_addr[15:0]),  .palram_wdata(ram_wdata),
-	.priram_we(priram_we), .priram_addr(ram_addr[12:0]),  .priram_wdata(ram_wdata[7:0]),
+	.cpu_clk(clk), .cpu_wdata(ram_wdata),
+	.txram_addr(ram_addr[12:0]),   .txram_wel(txram_we),     .txram_weh(txram_we),     .txram_rdata(),
+	.bgram_addr(ram_addr[12:0]),   .bgram_wel(bgram_we),     .bgram_weh(bgram_we),     .bgram_rdata(),
+	.rozram_addr(ram_addr[14:0]),  .rozram_wel(rozram_we),   .rozram_weh(rozram_we),   .rozram_rdata(),
+	.lineram_addr(ram_addr[10:0]), .lineram_wel(lineram_we), .lineram_weh(lineram_we), .lineram_rdata(),
+	.objram_addr(ram_addr[14:0]),  .objram_wel(objram_we),   .objram_weh(objram_we),   .objram_rdata(),
+	.palram_addr(ram_addr[15:0]),  .palram_wel(palram_we),   .palram_weh(palram_we),   .palram_rdata(),
+	.priram_addr(ram_addr[12:0]),  .priram_we(priram_we),                              .priram_rdata(),
 	.tx_rom_req(tx_req),  .tx_rom_addr(tx_addr),  .tx_rom_valid(SDRAM ? s_tx_valid : tx_valid),  .tx_rom_data(SDRAM ? s_tx_data : tx_data),
 	.bg_rom_req(bg_req),  .bg_rom_addr(bg_addr),  .bg_rom_valid(SDRAM ? s_bg_valid : bg_valid),  .bg_rom_data(SDRAM ? s_bg_data : bg_data),
 	.roz_rom_req(rz_req), .roz_rom_addr(rz_addr), .roz_rom_valid(SDRAM ? s_rz_valid : rz_valid), .roz_rom_data(SDRAM ? s_rz_data : rz_data),
@@ -140,17 +141,17 @@ end
 // and !BUSY, then BUSY for DDR_BUSY clocks. Same protocol assumptions as
 // the RTL -- this model cannot prove them, only the board can.
 localparam [27:0] FB_BASE = 28'h1000000;
-reg [63:0] ddr [0:65535];
+reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF
 reg        ddr_busy = 0;
 integer    ddr_busy_cnt = 0, ddr_rd_cnt = 0, ddr_rd_left = 0, ddr_wr_left = 0;
-reg [15:0] ddr_rd_word, ddr_wr_word;
+reg [17:0] ddr_rd_word, ddr_wr_word;
 reg        ddr_ready = 0;
 reg [63:0] ddr_dout;
 integer    ddr_reads = 0, ddr_writes = 0, ddr_cmds = 0;
 assign DDRAM_BUSY = ddr_busy;
 assign DDRAM_DOUT_READY = ddr_ready;
 assign DDRAM_DOUT = ddr_dout;
-wire [15:0] ddr_word = DDRAM_ADDR[15:0] - FB_BASE[18:3];
+wire [17:0] ddr_word = DDRAM_ADDR[17:0];
 always @(posedge clk) begin
 	ddr_ready <= 0;
 	if (ddr_busy_cnt > 0) begin ddr_busy_cnt <= ddr_busy_cnt - 1; if (ddr_busy_cnt == 1) ddr_busy <= 0; end
@@ -255,7 +256,7 @@ initial begin
 		for (k = 0; k < (1 << 24); k = k + 1) sprrom[k] = ((k & ~7) & 8'hFF) ^ (((k & ~7) >> 8) & 8'hFF) ^ (((k & ~7) >> 16) & 8'hFF);
 		$display("ROM STUB pattern in place of the ROMs");
 	end
-	for (k = 0; k < 65536; k = k + 1) ddr[k] = 64'd0;
+	for (k = 0; k < 262144; k = k + 1) ddr[k] = 64'd0;
 	for (k = 0; k < 320*224; k = k + 1) out[k] = 24'h000000;
 
 	repeat (20) @(posedge clk);
