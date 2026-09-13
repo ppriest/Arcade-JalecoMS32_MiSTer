@@ -25,7 +25,9 @@ always #25 clk_cpu = ~clk_cpu;  // clk_cpu, 20 MHz
 reg base_reset = 1;
 
 string CAP, GAME, OUTDIR;
-integer LAT, OLD, ROT;
+integer LAT, OLD, ROT, NVTEST;
+reg  [12:0] nv_addr = 13'd0;
+wire  [7:0] nv_rdata;
 
 // ------------------------------------------------------------- ioctl side
 reg         ioctl_download = 0, ioctl_wr = 0;
@@ -77,7 +79,9 @@ wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 // the V70 stays in reset: capture playback
 ms32_core u_core (
 	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(OLD != 0 ? reset : sys_reset), .cpu_run(1'b0), .invert_lines(1'b0),
-	.inputs(32'hFFFF_FFFF), .dsw(32'hFFFF_FFFF),
+	.inputs(32'hFFFF_FFFF), .dsw(32'hFFFF_FFFF), .mahjong(1'b0), .mj_keys({30{1'b1}}),
+	.nv_addr(nv_addr), .nv_rdata(nv_rdata), .nv_written(),
+	.snd_reset(), .snd_cmd_we(), .snd_cmd_data(), .snd_tomain_we(1'b0), .snd_tomain_data(8'h00),
 	.ld_req(ld_req), .ld_addr(ld_addr), .ld_be(ld_be), .ld_data(ld_data), .ld_ack(ld_ack),
 	.prg_req(), .prg_addr(), .prg_valid(1'b0), .prg_data(64'd0),
 	.tx_req(tx_req),   .tx_addr(tx_addr),  .tx_valid(tx_valid),  .tx_data(tx_data),
@@ -147,9 +151,9 @@ end
 
 // ------------------------------------------------------------ DDRAM model
 // sim/video_tb's model with a busy time of 6 and a read latency of 20.
-localparam [27:0] FB_BASE = 28'h1000000;
+localparam [27:0] FB_BASE = 28'h2000000;
 localparam integer DDR_BUSY = 6, DDR_LAT = 20;
-reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF
+reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF (DDRAM_ADDR's low 18 bits)
 reg        ddr_busy = 0;
 integer    ddr_busy_cnt = 0, ddr_rd_cnt = 0, ddr_rd_left = 0, ddr_wr_left = 0, j;
 reg [17:0] ddr_rd_word, ddr_wr_word;
@@ -219,6 +223,7 @@ initial begin
 	if (!$value$plusargs("LAT=%d", LAT))   LAT = 12;
 	if (!$value$plusargs("OLD=%d", OLD))   OLD = 0;
 	if (!$value$plusargs("ROT=%d", ROT))   ROT = 0;
+	if (!$value$plusargs("NVTEST=%d", NVTEST)) NVTEST = 0;
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/", CAP};
 
 	fd = $fopen({"roms/", GAME, "/txtiles_dec.bin"}, "rb"); if (fd == 0) begin $display("FATAL no txtiles_dec.bin"); $finish; end
@@ -243,6 +248,29 @@ initial begin
 	for (k = 0; k < blob_len; k = k + 1) send(k, blob[k]);
 	repeat (8) @(posedge clk);
 	ioctl_download <= 0;
+
+	// +NVTEST=1: the .mra's <nvram> download (index 4) through the loader, then
+	// the HPS's read-back through nv_addr/nv_rdata, byte for byte
+	if (NVTEST != 0) begin : nvtest
+		integer bad;
+		repeat (20) @(posedge clk);
+		ioctl_index <= 16'd4; ioctl_download <= 1;
+		repeat (8) @(posedge clk);
+		for (k = 0; k < 8192; k = k + 1) send(k, 8'((k * 7 + 3) ^ (k >> 8)));
+		repeat (8) @(posedge clk);
+		ioctl_download <= 0;
+		repeat (20) @(posedge clk);
+		bad = 0;
+		for (k = 0; k < 8192; k = k + 1) begin
+			nv_addr <= k[12:0];
+			@(posedge clk); @(posedge clk);
+			if (nv_rdata !== 8'((k * 7 + 3) ^ (k >> 8))) begin
+				if (bad < 5) $display("NVRAM %04x: read %02x, wrote %02x", k, nv_rdata, 8'((k * 7 + 3) ^ (k >> 8)));
+				bad = bad + 1;
+			end
+		end
+		$display("NVRAM: %0d of 8192 bytes read back differently", bad);
+	end
 	frame = 0;
 
 	wait (frame == 4);

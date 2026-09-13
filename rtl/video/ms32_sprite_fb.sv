@@ -36,7 +36,7 @@
 // object RAM copy (ms32_objram), served after the line reads and before the
 // clears and the sprite words.
 module ms32_sprite_fb #(
-	parameter logic [27:0] BASE = 28'h1000000   // byte offset inside the 0x30000000 window
+	parameter logic [27:0] BASE = 28'h2000000   // byte offset inside the 0x30000000 window; below 0x1C00000 is the fast-load ROM image
 ) (
 	input  logic        clk,
 	input  logic        reset,

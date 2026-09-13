@@ -9,6 +9,9 @@
 // ioctl_wait holds the HPS off from the byte that completes a word until
 // that write has been acknowledged across the clock domains.
 //
+// Index 4 is the .mra's <nvram> file, 0x2000 bytes: byte n is written to
+// NVRAM at 0xC0000000 + 4n the same way, while the V70 is held.
+//
 // The download holds the core reset, and the writes arrive during it:
 // sys_reset is the core reset with the capture download taken out, and both
 // ms32_video and ms32_cpu_sys's bus side must run from it or every write is
@@ -43,7 +46,8 @@ module ms32_capture_loader (
 	localparam int W_END     = W_VREGS   + 'h400;
 
 	wire ld_capture = ioctl_download && (ioctl_index[5:0] == 6'd2);
-	assign sys_reset = reset & ~ld_capture;
+	wire ld_nvram   = ioctl_download && (ioctl_index[5:0] == 6'd4);
+	assign sys_reset = reset & ~(ld_capture | ld_nvram);
 
 	// region base address and u16 index for word w
 	function automatic logic [35:0] place(input logic [17:0] w);   // {be, addr}
@@ -64,10 +68,16 @@ module ms32_capture_loader (
 
 	logic [7:0] lo;
 	always_ff @(posedge clk) begin
-		if (reset && !ld_capture) begin
+		if (reset && !ld_capture && !ld_nvram) begin
 			ld_req <= 1'b0;
 		end else begin
 			if (ld_ack) ld_req <= 1'b0;
+			if (ld_nvram && ioctl_wr && ioctl_addr[26:13] == 14'd0) begin
+				ld_addr <= 32'hC000_0000 + {17'd0, ioctl_addr[12:0], 2'b00};
+				ld_be   <= 4'b0001;
+				ld_data <= {24'd0, ioctl_dout};
+				ld_req  <= 1'b1;
+			end
 			if (ld_capture && ioctl_wr) begin
 				if (!ioctl_addr[0]) lo <= ioctl_dout;
 				else if (ioctl_addr[18:1] < W_END) begin
@@ -79,6 +89,6 @@ module ms32_capture_loader (
 		end
 	end
 
-	assign ioctl_wait = ld_req || (ld_capture && ioctl_wr && ioctl_addr[0]);
+	assign ioctl_wait = ld_req || (ld_capture && ioctl_wr && ioctl_addr[0]) || (ld_nvram && ioctl_wr);
 
 endmodule

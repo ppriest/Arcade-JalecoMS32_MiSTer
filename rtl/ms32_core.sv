@@ -14,6 +14,21 @@ module ms32_core (
 
 	input  logic [31:0] inputs,
 	input  logic [31:0] dsw,
+	input  logic        mahjong,
+	input  logic [29:0] mj_keys,
+
+	// clk_sys: NVRAM read-back and write events
+	input  logic [12:0] nv_addr,
+	output logic [7:0]  nv_rdata,
+	output logic        nv_written,
+
+	// clk_sys: the sound board (ms32_sound, outside the core: the T80 is VHDL
+	// and the Verilator benches run this module)
+	output logic        snd_reset,        // one clock: sysctrl 0x38 written with bit 0 set
+	output logic        snd_cmd_we,
+	output logic [7:0]  snd_cmd_data,
+	input  logic        snd_tomain_we,
+	input  logic [7:0]  snd_tomain_data,
 
 	// clk_sys: capture loader writes
 	input  logic        ld_req,
@@ -69,9 +84,12 @@ module ms32_core (
 
 	ms32_cpu_sys u_sys (
 		.clk_cpu(clk_cpu), .clk_sys(clk_sys), .rst_sys(sys_reset), .cpu_run_sys(cpu_run), .invert_lines(invert_lines),
-		.inputs(inputs), .dsw(dsw),
+		.inputs(inputs), .dsw(dsw), .mahjong(mahjong), .mj_keys(mj_keys),
+		.nv_addr(nv_addr), .nv_rdata(nv_rdata), .nv_written(nv_written),
 		.vreg_we(vreg_we), .vreg_off(vreg_off), .vreg_data(vreg_data),
 		.vblank_ev(vblank_ev), .field_ev(field_ev),
+		.snd_cmd_we(snd_cmd_we), .snd_cmd_data(snd_cmd_data),
+		.snd_tomain_we(snd_tomain_we), .snd_tomain_data(snd_tomain_data),
 		.rom_req(prg_req), .rom_addr(prg_addr), .rom_valid(prg_valid), .rom_data(prg_data),
 		.ld_req(ld_req), .ld_addr(ld_addr), .ld_be(ld_be), .ld_data(ld_data), .ld_ack(ld_ack),
 		.txram_addr(txram_addr), .txram_wel(txram_wel), .txram_weh(txram_weh), .txram_rdata(txram_rdata),
@@ -84,6 +102,9 @@ module ms32_core (
 		.vram_wdata(vram_wdata),
 		.dbg_pc(dbg_pc), .dbg_accesses(), .dbg_cache_hits(), .dbg_cache_misses()
 	);
+
+	// jaleco_ms32_sysctrl sound_reset_w: bit 0 pulses the Z80's reset
+	assign snd_reset = vreg_we && vreg_off == 12'h038 && vreg_data[0];
 
 	ms32_video u_video (
 		.clk(clk_sys), .reset(sys_reset),

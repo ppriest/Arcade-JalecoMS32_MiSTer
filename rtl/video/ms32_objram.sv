@@ -25,7 +25,7 @@
 //
 // The DDRAM port belongs to ms32_sprite_fb; these bursts are its j_* jobs.
 module ms32_objram #(
-	parameter logic [27:3] BASE_W = 25'h0220000   // byte 0x1100000 of the DDR3 window
+	parameter logic [27:3] BASE_W = 25'h0420000   // byte 0x2100000 of the DDR3 window, above the fast-load ROM image
 ) (
 	input  logic        clk,
 	input  logic        reset,

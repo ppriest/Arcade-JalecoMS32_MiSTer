@@ -2,6 +2,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_jalcrpt_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/dpram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/dpram_dc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_ddram_mux.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ddram_phy.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_rom_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/screen_rotate_two.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/v60/s32_v60.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/ms32_v70_bus.sv
@@ -23,6 +25,14 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_sprite.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_sprite_fb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_mixer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_video.sv
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_Pack.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_MCode.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_ALU.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_Reg.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80.vhd
+set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80se.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ms32_ymf271_timers.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ms32_sound.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/ms32_capture_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms32_core.sv

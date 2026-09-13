@@ -10,7 +10,8 @@
 // CLOCK DOMAINS. Everything here runs on clk_cpu except the ports marked
 // "clk_sys", which cross through ms32_cdc.sv's three shapes and nothing
 // else: register writes to the video path (mailbox), vblank and field
-// (events), ROM granules (request), the capture loader's writes (request).
+// (events), ROM granules (request), the capture loader's writes (request),
+// the sound latches (mailboxes).
 //
 // DECODE. As sim/v70_boot_tb, which matched MAME over 5M accesses of the
 // tetrisp boot: every RAM region mirrors address bits 29:26, so
@@ -38,6 +39,8 @@ module ms32_cpu_sys (
 	// clk_sys: inputs, active low as the board reads them
 	input  logic [31:0] inputs,
 	input  logic [31:0] dsw,
+	input  logic        mahjong,          // static: the INPUTS low byte is the mahjong key matrix
+	input  logic [29:0] mj_keys,          // rows KEY0-KEY4, 6 bits each, active low
 
 	// clk_sys: register writes to ms32_video (byte offset in 0xFCE00000, low halfword)
 	output logic        vreg_we,
@@ -48,11 +51,23 @@ module ms32_cpu_sys (
 	input  logic        vblank_ev,
 	input  logic        field_ev,
 
+	// clk_sys: the sound board (ms32_sound). The V70's latch writes out, the
+	// Z80's writes to to_main in.
+	output logic        snd_cmd_we,
+	output logic [7:0]  snd_cmd_data,
+	input  logic        snd_tomain_we,
+	input  logic [7:0]  snd_tomain_data,
+
 	// clk_sys: program ROM granules, ROM-local granule index (x8 bytes)
 	output logic        rom_req,
 	output logic [17:0] rom_addr,
 	input  logic        rom_valid,
 	input  logic [63:0] rom_data,
+
+	// clk_sys: NVRAM read-back for the HPS, and one pulse per CPU write to it
+	input  logic [12:0] nv_addr,
+	output logic [7:0]  nv_rdata,
+	output logic        nv_written,
 
 	// clk_sys: capture loader, one write per request
 	input  logic        ld_req,           // held until ld_ack
@@ -170,6 +185,7 @@ module ms32_cpu_sys (
 	wire is_inputs  = (a == 32'hfcc0_0004);
 	wire is_dsw     = (a == 32'hfcc0_0010);
 	wire is_sndres  = (a == 32'hfd00_0000);
+	wire is_mjsel   = (a == 32'hfd1c_0000);
 	// the register block's RAM-backed ranges read back; the rest is write-only
 	wire regs_rd    = (a[11:0] >= 12'h200 && a[11:0] < 12'h280) || (a[11:0] >= 12'h600 && a[11:0] < 12'h660) ||
 	                  (a[11:0] >= 12'ha00 && a[11:0] < 12'ha38);
@@ -194,13 +210,17 @@ module ms32_cpu_sys (
 		wram_q <= wram[a[16:2]];
 	end
 
-	// NVRAM: 0x2000 bytes, 8-bit
-	logic [7:0] nvram [0:8191];
+	// NVRAM: 0x2000 bytes, 8-bit, battery-backed on the board. Port B is the
+	// HPS's read-back when it saves the .mra's <nvram> file (clk_sys); the
+	// file comes down through the loader port like a capture. Every CPU write
+	// is an event in clk_sys, so the top level knows there is something to save.
 	logic [7:0] nvram_q;
-	always_ff @(posedge clk_cpu) begin
-		if (wr && is_nvram && m_be[0]) nvram[a[14:2]] <= m_wdata[7:0];
-		nvram_q <= nvram[a[14:2]];
-	end
+	wire        nv_we = wr && is_nvram && m_be[0];
+	dpram_dc #(.ADDR_WIDTH(13), .DATA_WIDTH(8)) u_nvram (
+		.clk_a(clk_cpu), .a_addr(a[14:2]), .a_wel(nv_we), .a_weh(1'b0), .a_wdata(m_wdata[7:0]), .a_rdata(nvram_q),
+		.clk_b(clk_sys), .b_addr(nv_addr), .b_re(1'b1), .b_rdata(nv_rdata)
+	);
+	ms32_cdc_event u_nv_ev (.clk_s(clk_cpu), .s_pulse(nv_we && !ld_owns), .clk_d(clk_sys), .d_pulse(nv_written));
 
 	// register block readback: 0x400 dwords, 32-bit
 	logic [31:0] regs [0:1023];
@@ -223,19 +243,50 @@ module ms32_cpu_sys (
 	// ------------------------------------------------------------- inputs
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	logic [31:0] in_s1, in_s2, dsw_s1, dsw_s2;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [29:0] mj_s1, mj_s2;
 	always_ff @(posedge clk_cpu) begin
 		in_s1 <= inputs; in_s2 <= in_s1;
 		dsw_s1 <= dsw;   dsw_s2 <= dsw_s1;
+		mj_s1 <= mj_keys; mj_s2 <= mj_s1;
 	end
 
-	// ------------------------------------------------------------- sound latch (no Z80 until Phase 3)
-	// ms32.cpp: 0xFC800000 loads the Z80's latch; 0xFD000000 returns to_main
-	// inverted and clears IRQ level 1. With no sound CPU to_main stays 0.
-	logic [7:0] to_main;
-	logic [7:0] snd_latch;
+	// ms32.cpp mahjong_ctrl_r: 0xFD1C0000 (write-only) selects key rows by
+	// bits 0-4; the rows selected are ANDed, then bitswap<6>(v, 4,2,3,1,0,5)
+	// puts the Start column in bit 0, and bits 7:6 read 1.
+	logic [4:0] mj_sel;
 	always_ff @(posedge clk_cpu) begin
-		if (rst) begin to_main <= 8'h00; snd_latch <= 8'h00; end
-		else if (wr && is_sndcmd) snd_latch <= m_wdata[7:0];
+		if (rst) mj_sel <= 5'd0;
+		else if (wr && is_mjsel && m_be[0]) mj_sel <= m_wdata[4:0];
+	end
+	logic [5:0] mj_and;
+	always_comb begin
+		mj_and = 6'h3f;
+		for (int i = 0; i < 5; i++) if (mj_sel[i]) mj_and = mj_and & mj_s2[6*i +: 6];
+	end
+	wire [7:0]  mj_byte   = {2'b11, mj_and[4], mj_and[2], mj_and[3], mj_and[1], mj_and[0], mj_and[5]};
+	wire [31:0] in_read   = mahjong ? {in_s2[31:8], mj_byte} : in_s2;
+
+	// ------------------------------------------------------------- sound latches
+	// ms32.cpp: 0xFC800000 loads the Z80's command latch (in ms32_sound);
+	// the Z80's write to 0x3F10 loads to_main and raises IRQ level 1;
+	// 0xFD000000 returns to_main inverted and clears level 1; sysctrl's
+	// sound ack (0xFCE0004C, sound_ack_w) sets to_main to 0xFF.
+	ms32_cdc_mailbox #(.W(8)) u_snd_cmd (
+		.clk_s(clk_cpu), .s_pulse(wr && is_sndcmd && m_be[0]), .s_data(m_wdata[7:0]),
+		.clk_d(clk_sys), .d_pulse(snd_cmd_we), .d_data(snd_cmd_data)
+	);
+	logic       tomain_we;
+	logic [7:0] tomain_data;
+	ms32_cdc_mailbox #(.W(8)) u_snd_res (
+		.clk_s(clk_sys), .s_pulse(snd_tomain_we), .s_data(snd_tomain_data),
+		.clk_d(clk_cpu), .d_pulse(tomain_we), .d_data(tomain_data)
+	);
+	logic [7:0] to_main;
+	always_ff @(posedge clk_cpu) begin
+		if (rst) to_main <= 8'h00;
+		else if (tomain_we) to_main <= tomain_data;
+		else if (wr && is_regs && a[11:0] == 12'h04C) to_main <= 8'hFF;
 	end
 	wire snd_irq_clr = accept && !m_we && is_sndres;
 
@@ -287,7 +338,7 @@ module ms32_cpu_sys (
 					R_TX:    m_rdata <= {16'd0, txram_rdata};
 					R_BG:    m_rdata <= {16'd0, bgram_rdata};
 					R_REGS:  m_rdata <= regs_q;
-					R_IN:    m_rdata <= in_s2;
+					R_IN:    m_rdata <= in_read;
 					R_DSW:   m_rdata <= dsw_s2;
 					R_SND:   m_rdata <= {24'd0, ~to_main};
 					default: m_rdata <= 32'd0;
@@ -315,7 +366,7 @@ module ms32_cpu_sys (
 		.clk(clk_cpu), .reset(rst), .invert_lines(invert_lines),
 		.wr(reg_wr), .wr_off(a[11:0]), .wr_data(m_wdata[15:0]),
 		.vblank_ev(vbl_cpu), .field_ev(fld_cpu),
-		.sound_irq_set(1'b0), .sound_irq_clr(snd_irq_clr),
+		.sound_irq_set(tomain_we), .sound_irq_clr(snd_irq_clr),
 		.irq_n(irq_n), .irq_vector(irq_vector)
 	);
 

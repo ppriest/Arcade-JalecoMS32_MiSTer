@@ -51,6 +51,13 @@ Obligations this project carries:
   changed here. That is this project's own convention rather than a licence term, and it is how the
   next person works out whether an upstream fix applies.
 
+### T80 � BSD-style (3-clause)
+
+<https://github.com/MiSTer-devel/T80> at `830fd03`, the Z80 core (Daniel Wallner, MikeJ and the
+MiSTer-devel maintainers), in `rtl/cpu/t80/`, copied unchanged from the Fuuki core. Each file's
+header carries the licence: redistribution with the copyright notice and conditions kept, no copyleft,
+compatible with GPL-3.0-or-later. Details in `rtl/cpu/t80/PROVENANCE.md`.
+
 ### MiSTer template and `sys/` — GPL-2.0-or-later
 
 <https://github.com/MiSTer-devel/Template_MiSTer> — framework, `hps_io`, the scaler, `sys_top`.

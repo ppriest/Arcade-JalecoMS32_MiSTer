@@ -64,6 +64,26 @@ def roms(text):
     return out
 
 
+def crcs(text):
+    """{set: {file: crc32}} from the CRC(...) on every ROM_LOAD in a region this project loads.
+    The .mra carries them so MiSTer can find a file by CRC: a merged parent zip keeps a clone's
+    files in a subdirectory, or under the parent's name when the data is the same."""
+    out = {}
+    for m in re.finditer(r"ROM_START\(\s*(\w+)\s*\)(.*?)ROM_END", text, re.S):
+        d, cur = {}, None
+        for raw in m.group(2).split("\n"):
+            line = raw.split("//")[0].strip()
+            r = re.match(r'ROM_REGION(?:32_LE)?\(\s*\w+\s*,\s*"(\w+)"', line)
+            if r:
+                cur = r.group(1)
+                continue
+            r = re.match(r'ROM_LOAD\w*\(\s*"([^"]+)".*CRC\(([0-9a-fA-F]{8})\)', line)
+            if r and cur in REGIONS:
+                d[r.group(1)] = int(r.group(2), 16)
+        out[m.group(1)] = d
+    return out
+
+
 def games(text):
     """{set: dict(parent, machine, init, rot, maker, name, year)} from GAME() lines."""
     out = {}

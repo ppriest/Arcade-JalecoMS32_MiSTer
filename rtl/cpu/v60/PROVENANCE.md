@@ -93,5 +93,7 @@ Both files started byte-identical to upstream (`md5 b349f9d245681e95d33cb8c867d1
 
 | 2026-09-12 | `s32_v60.sv` | `fetch_is_rom` is a parameter pair `IF_ROM{0,1}_{MASK,MATCH}` | it hard-coded upstream's two 24-bit ROM ranges, so `FAST_IFETCH` never served MS32's ROM at `0xFFE00000` (0xFFE0xxxx failed the `[23:20]==F` test, 0xFFF0xxxx passed). Defaults reproduce upstream's expression exactly; `sim/v70_boot_tb` passes the MS32 window |
 
+| 2026-09-13 | `s32_v60.sv` | MAME's dim-3 (qword) operands: MOVD's short-form register source is the register pair (`flag1`), and autoincrement, autodecrement and index scaling step by 8 for MOVD's operands and MULX/MULUX/DIVX/DIVUX's second (`ea_qword`) | `tp2m32`'s text-layer clear, `MOVD R15,(R1)+` at `0xFFE9E05C`, read memory at R15's value (0x20) and stepped R1 by 4: the left of the title screen drew tile 0. Found by diffing the tile RAMs against a MAME capture, then the write streams |
+
 `s32_v60_bus.sv` is unmodified and unused here: `rtl/cpu/ms32_v70_bus.sv` (this project's own
 file) is the 32-bit adapter.

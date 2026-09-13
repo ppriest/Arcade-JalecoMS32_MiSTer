@@ -12,7 +12,7 @@
 # fails every check at once, which reads exactly like an RTL regression --
 # grep the log for `readmem` first (LESSONS_LEARNED, "Testbench discipline").
 #
-# PORTED FROM THE SETA CORE, minus its vcom step: this core has no VHDL.
+# PORTED FROM THE SETA CORE. The one VHDL block is T80 (vcom below).
 # The vendored V60/V70 core's own suite has its own runner
 # (scripts/run_v60_tests.sh), because it is thirty benches on one compile.
 #
@@ -44,10 +44,15 @@ fi
 rm -rf work
 "$MS/vlib.exe" work >/dev/null
 
+# T80, the sound CPU (VHDL, rtl/cpu/t80/PROVENANCE.md)
+"$MS/vcom.exe" -quiet -93 -work work     rtl/cpu/t80/T80_Pack.vhd rtl/cpu/t80/T80_MCode.vhd rtl/cpu/t80/T80_ALU.vhd     rtl/cpu/t80/T80_Reg.vhd rtl/cpu/t80/T80.vhd rtl/cpu/t80/T80se.vhd
+
 # Every RTL file, the shared models in sim/common, plus the bench. The vendored CPU's own benches are not
 # compiled here -- they have their own runner -- and rtl/synth_check is a
 # Quartus-only harness.
-RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' -not -name '*_upstream_reference.sv' | sort)
+# screen_rotate_two.sv (Sorgelig's, as vendored) uses its variables before declaring them, which
+# Quartus and Verilator accept and ModelSim's vlog rejects; no ModelSim bench instantiates it.
+RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' -not -name '*_upstream_reference.sv' -not -name 'screen_rotate_two.sv' | sort)
 echo "--- vlog ---"
 # INITREG defaults to the jotego-style zero-initialisation the sibling cores
 # use. Set INITREG=" " to run four-state (X) instead -- see the note in

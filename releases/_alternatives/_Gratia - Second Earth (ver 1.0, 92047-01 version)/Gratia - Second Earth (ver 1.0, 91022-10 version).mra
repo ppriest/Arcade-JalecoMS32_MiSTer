@@ -24,37 +24,38 @@
     <dip name="Language" bits="23" ids="English,Japanese"/>
   </switches>
   <rom index="1"><part>00</part></rom>   <!-- mod byte: key ss91022_10 -->
-  <rom index="0" zip="gratiaa.zip|gratia.zip" md5="none">
+  <rom index="0" zip="gratiaa.zip|gratia.zip" md5="none" address="0x30000000">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
-        <part name="94019_29_ver1.0.29" map="0001"/>
-        <part name="94019_28_ver1.0.28" map="0010"/>
-        <part name="94019_27_ver1.0.27" map="0100"/>
-        <part name="94019_26_ver1.0.26" map="1000"/>
+        <part name="94019_29_ver1.0.29" crc="8059800b" map="0001"/>
+        <part name="94019_28_ver1.0.28" crc="e0762e89" map="0010"/>
+        <part name="94019_27_ver1.0.27" crc="ba3318c5" map="0100"/>
+        <part name="94019_26_ver1.0.26" crc="f398cba5" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
-      <part name="94019_30ver1.0.30"/>
+      <part name="94019_30ver1.0.30" crc="026b5379"/>
     <!-- bgtiles: 0x200000 bytes at 0x280000, repeated 2x -->
-      <part name="mr94019-07.10"/>
-      <part name="mr94019-07.10"/>
+      <part name="mr94019-07.10" crc="561a786b"/>
+      <part name="mr94019-07.10" crc="561a786b"/>
     <!-- roztiles: 0x400000 bytes at 0x680000, repeated 1x -->
-      <part name="mr94019-08.11"/>
-      <part name="mr94019-09.12"/>
+      <part name="mr94019-08.11" crc="abd124e0"/>
+      <part name="mr94019-09.12" crc="711ab08b"/>
     <!-- sprite: 0xc00000 bytes at 0xa80000, repeated 1x, then 0x500000 bytes of zeros (a partial repeat cannot be expressed; tiles past the ROM read as pen 0 here where MAME wraps) -->
       <interleave output="32">
-        <part name="mr94019-01.13" map="0021"/>
-        <part name="mr94019-02.1" map="2100"/>
+        <part name="mr94019-01.13" crc="92d8ae9b" map="0021"/>
+        <part name="mr94019-02.1" crc="f7bd9cc4" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr94019-03.14" map="0021"/>
-        <part name="mr94019-04.2" map="2100"/>
+        <part name="mr94019-03.14" crc="62a69590" map="0021"/>
+        <part name="mr94019-04.2" crc="5a76a39b" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr94019-05.15" map="0021"/>
-        <part name="mr94019-06.3" map="2100"/>
+        <part name="mr94019-05.15" crc="a16994df" map="0021"/>
+        <part name="mr94019-06.3" crc="01d52ef1" map="2100"/>
       </interleave>
       <part repeat="0x500000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
-      <part name="94019_21ver1.0.21"/>
+      <part name="94019_21ver1.0.21" crc="6e8dd039"/>
   </rom>
+  <nvram index="4" size="8192"/>
 </misterromdescription>

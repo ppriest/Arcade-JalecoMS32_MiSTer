@@ -121,6 +121,21 @@ The RTL consequence is the one already in the ROADMAP's pitfall table: a
 line buffer that runs out of time must drop the sprites the chip would draw
 LAST, and here "last" is the low end of the list.
 
+### [MS32] A swapped callback moves the events, not the acknowledges
+
+`jaleco_ms32_sysctrl` with `set_invert_vblank_lines` calls `m_field_cb` at the
+vblank line and `m_vblank_cb` at the field line. `ms32.cpp` wires those two
+callbacks to levels 9 and 10 once, and `vblank_ack_w`/`field_ack_w` call the
+callbacks by name. So under inversion vblank raises level 9, and the field ack
+(not the vblank ack) is what clears it. The RTL moved the acks with the events;
+`tp2m32`, the one inverted set, then acked a level that was never set, and took
+about 2,800 interrupts a frame from frame 60 with the V70 looping at
+0xFFE008D0. The boot trace against MAME showed it at once: MAME took no
+interrupt in its first 300,000 accesses.
+
+A configuration flag that swaps wiring has to be traced to every consumer of
+the wires, acknowledges included, before the RTL mirrors it.
+
 ### Read the framework's source instead of inferring its behaviour
 
 DIP switches were assumed to arrive through the status word, and two fixes were built on that
@@ -544,6 +559,17 @@ The cheapest check, and it was skipped for days. See "Timing closure".
 - **Write a smoke test (elaborate, run N cycles, check for crash and X-propagation) before a
   functional test** on any new top-level integration -- it catches port-width and wiring mistakes
   cheaply.
+
+### [MS32] A held-request memory model must not accept on the clock its valid leaves
+
+`sdram_narrow_bridge` holds `g_req` until the clock after `g_valid`. The first
+granule model in `sim/sound_tb` accepted a request whenever its counter was
+idle, which it was on that clock, so it latched a second copy of every miss
+and answered the next request with a stale granule: 9,674 wrong ROM bytes in
+50 ms, which looked like a CPU that ran fine for a few milliseconds and then
+wandered. A check of every byte handed to the CPU against the ROM at the
+requested address found it in one run; keep that checker in any bench that
+models a memory transport.
 
 ### [MS32] A CPI measured on the power-on RAM test is a CPI of the RAM test
 
@@ -1155,6 +1181,18 @@ only -- same class of fix as `sdram.sv`'s uninitialized `state`/`ack0..2`.
 The Phase 0 spike ran 68020-only opcodes (MULU.L, DIVU.L, scaled-index addressing, BFEXTU) before
 further work was committed. Two apparent "core bugs" during that spike turned out to be testbench
 mistakes.
+
+### [MS32] A T80 waiting on SDRAM is a slow Z80: repay the lost clock enables
+
+A real Z80 reads its ROM with no wait states; the T80 behind the SDRAM bridge
+waits a T-state or two per fetch. In `sim/sound_tb` against MAME's timestamped
+trace, tetrisp's boot ROM test took 0.1168 s a bank against MAME's 0.0983
+(fixed 12-clock ROM model) and 0.1229 s through the real bridge, and the V70
+reads the Z80's boot answer at a fixed time. `ms32_sound` counts each clock
+enable that lands on a read held in T2 and repays it with an extra enable at
+the half period; the same run then measured 0.098361 s a bank. The bridge and
+the arbiter's latency are the Z80's clock; measure the Z80's time against the
+reference, not only its correctness.
 
 ### Derive `WAIT_n` timing from the CPU's internal T-state behaviour, not external bus inference
 

@@ -27,32 +27,33 @@
     <dip name="Language" bits="23" ids="English,Japanese"/>
   </switches>
   <rom index="1"><part>04</part></rom>   <!-- mod byte: key ss91022_10, vblank/field swapped -->
-  <rom index="0" zip="tp2m32.zip|tetrisp2.zip" md5="none">
+  <rom index="0" zip="tp2m32.zip|tetrisp2.zip" md5="none" address="0x30000000">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
-        <part name="mp2_29.ver1.0.29" map="0001"/>
-        <part name="mp2_28.ver1.0.28" map="0010"/>
-        <part name="mp2_27.ver1.0.27" map="0100"/>
-        <part name="mp2_26.ver1.0.26" map="1000"/>
+        <part name="mp2_29.ver1.0.29" crc="4e83b2ca" map="0001"/>
+        <part name="mp2_28.ver1.0.28" crc="041aac23" map="0010"/>
+        <part name="mp2_27.ver1.0.27" crc="d89468d0" map="0100"/>
+        <part name="mp2_26.ver1.0.26" crc="152f0ccf" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
-      <part name="mp2_30.ver1.0.30"/>
+      <part name="mp2_30.ver1.0.30" crc="6845e476"/>
     <!-- bgtiles: 0x400000 bytes at 0x280000, repeated 1x -->
-      <part name="mr96019-03.10"/>
+      <part name="mr96019-03.10" crc="94af8057"/>
     <!-- roztiles: 0x200000 bytes at 0x680000, repeated 2x -->
-      <part name="mr96019-04.11"/>
-      <part name="mr96019-04.11"/>
+      <part name="mr96019-04.11" crc="b5a03129"/>
+      <part name="mr96019-04.11" crc="b5a03129"/>
     <!-- sprite: 0x800000 bytes at 0xa80000, repeated 2x, then 0x100000 bytes of zeros (a partial repeat cannot be expressed; tiles past the ROM read as pen 0 here where MAME wraps) -->
       <interleave output="32">
-        <part name="mr96019-01.13" map="0021"/>
-        <part name="mr96019-02.1" map="2100"/>
+        <part name="mr96019-01.13" crc="06f7dc64" map="0021"/>
+        <part name="mr96019-02.1" crc="3e613bed" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr96019-01.13" map="0021"/>
-        <part name="mr96019-02.1" map="2100"/>
+        <part name="mr96019-01.13" crc="06f7dc64" map="0021"/>
+        <part name="mr96019-02.1" crc="3e613bed" map="2100"/>
       </interleave>
       <part repeat="0x100000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
-      <part name="mp2_21.ver1.0.21"/>
+      <part name="mp2_21.ver1.0.21" crc="2bcc4176"/>
   </rom>
+  <nvram index="4" size="8192"/>
 </misterromdescription>

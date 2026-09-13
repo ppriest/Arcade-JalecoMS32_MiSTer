@@ -18,6 +18,13 @@
 //    2026-09-12  fetch_is_rom (which addresses the FAST_IFETCH port may
 //                serve) is a parameter pair IF_ROM{0,1}_{MASK,MATCH}; the
 //                defaults are upstream's two 24-bit ranges unchanged.
+//    2026-09-13  MAME's dim 3 (qword) operands: MOVD's register source in
+//                the F2 D=0 short form is the register PAIR (op1 an lvalue,
+//                as XCH), and autoincrement, autodecrement and index
+//                scaling step by 8 for MOVD's operands and the second
+//                operand of MULX/MULUX/DIVX/DIVUX (ea_qword). tp2m32's text
+//                clear, MOVD R15,(R1)+, read memory at R15's value and
+//                advanced R1 by 4.
 //  See rtl/cpu/v60/PROVENANCE.md.
 //============================================================================
 //  NEC V60 (uPD70616) / V70 (uPD70632) CPU core for the Sega System 32
@@ -1051,6 +1058,16 @@ function automatic [31:0] dim_step(input [1:0] d);
     dim_step = (d==2'd0) ? 32'd1 : (d==2'd1) ? 32'd2 : 32'd4;
 endfunction
 
+// [MS32] qword operands, MAME's moddim 3 (op12.hxx): both of MOVD's, and the
+// second of MULX/MULUX/DIVX/DIVUX. ea_dim stays 2 for them (it also sizes the
+// bus access); these give the addressing-mode step and index scale.
+wire        ea_qword = (cls == C_F12) &&
+                       (cur_op == 8'h3f ||
+                        (ea_target2 && (cur_op == 8'h86 || cur_op == 8'h96 ||
+                                        cur_op == 8'ha6 || cur_op == 8'hb6)));
+wire [1:0]  ea_sh    = ea_qword ? 2'd3  : ea_dim;
+wire [31:0] ea_step  = ea_qword ? 32'd8 : dim_step(ea_dim);
+
 // ---------------------------------------------------------------------------
 // main FSM
 // ---------------------------------------------------------------------------
@@ -1780,7 +1797,7 @@ else if (ce) begin
                 // and the on-scale character never rendered. f12_op1_is_addr
                 // already classifies XCH op1 as an address for the F1/F2-D=1
                 // paths; this closes the F2-D=0 gap. (encoding 45 53 74)
-                if (cur_op == 8'h41 || cur_op == 8'h43 || cur_op == 8'h45) begin
+                if (cur_op == 8'h41 || cur_op == 8'h43 || cur_op == 8'h45 || cur_op == 8'h3f) begin  // [MS32] MOVD
                     op1   <= {27'b0, instflags[4:0]};
                     flag1 <= 1'b1;
                 end
@@ -2031,9 +2048,9 @@ else if (ce) begin
                 end
                 ea_len <= 5'd1;
             end
-            3'd4: begin             // Autoincrement
+            3'd4: begin             // Autoincrement ([MS32] ea_step: 8 for a qword)
                 ea_addr <= rf_rdata_a;
-                queue_reg_write(modreg, rf_rdata_a + dim_step(ea_dim), 32'hffff_ffff);
+                queue_reg_write(modreg, rf_rdata_a + ea_step, 32'hffff_ffff);
                 ea_len <= 5'd1;
                 if (ea_want_addr)
                     complete_ea_now(rf_rdata_a, 1'b0, 1'b0, 5'd1);
@@ -2043,15 +2060,15 @@ else if (ce) begin
                     st <= S_EA_VAL;
                 end
             end
-            3'd5: begin             // Autodecrement
-                ea_addr <= rf_rdata_a - dim_step(ea_dim);
-                queue_reg_write(modreg, rf_rdata_a - dim_step(ea_dim), 32'hffff_ffff);
+            3'd5: begin             // Autodecrement ([MS32] ea_step: 8 for a qword)
+                ea_addr <= rf_rdata_a - ea_step;
+                queue_reg_write(modreg, rf_rdata_a - ea_step, 32'hffff_ffff);
                 ea_len <= 5'd1;
                 if (ea_want_addr)
-                    complete_ea_now(rf_rdata_a - dim_step(ea_dim), 1'b0, 1'b0, 5'd1);
+                    complete_ea_now(rf_rdata_a - ea_step, 1'b0, 1'b0, 5'd1);
                 else begin
                     dbus_req <= 1'b1; dbus_we <= 1'b0; dbus_size <= ea_dim;
-                    dbus_addr <= rf_rdata_a - dim_step(ea_dim);
+                    dbus_addr <= rf_rdata_a - ea_step;
                     st <= S_EA_VAL;
                 end
             end
@@ -2059,26 +2076,26 @@ else if (ce) begin
                 case (modval2[7:5])
                 3'd0, 3'd1, 3'd2: begin // Displacement indexed: [reg2+disp] + reg1*size
                     d1t = disp_of(ea_ofs+2, modval2[6:5]);
-                    ea_addr <= rf_rdata_b + d1t + (rf_rdata_a << ea_dim);
+                    ea_addr <= rf_rdata_b + d1t + (rf_rdata_a << ea_sh);
                     ea_len  <= 5'd2 + disp_len(modval2[6:5]);
                     if (ea_want_addr)
-                        complete_ea_now(rf_rdata_b + d1t + (rf_rdata_a << ea_dim),
+                        complete_ea_now(rf_rdata_b + d1t + (rf_rdata_a << ea_sh),
                                         1'b0, 1'b0, 5'd2 + disp_len(modval2[6:5]));
                     else begin
                         dbus_req <= 1'b1; dbus_we <= 1'b0; dbus_size <= ea_dim;
-                        dbus_addr <= rf_rdata_b + d1t + (rf_rdata_a << ea_dim);
+                        dbus_addr <= rf_rdata_b + d1t + (rf_rdata_a << ea_sh);
                         st <= S_EA_VAL;
                     end
                 end
                 3'd3: begin            // Register indirect indexed
-                    ea_addr <= rf_rdata_b + (rf_rdata_a << ea_dim);
+                    ea_addr <= rf_rdata_b + (rf_rdata_a << ea_sh);
                     ea_len  <= 5'd2;
                     if (ea_want_addr)
-                        complete_ea_now(rf_rdata_b + (rf_rdata_a << ea_dim),
+                        complete_ea_now(rf_rdata_b + (rf_rdata_a << ea_sh),
                                         1'b0, 1'b0, 5'd2);
                     else begin
                         dbus_req <= 1'b1; dbus_we <= 1'b0; dbus_size <= ea_dim;
-                        dbus_addr <= rf_rdata_b + (rf_rdata_a << ea_dim);
+                        dbus_addr <= rf_rdata_b + (rf_rdata_a << ea_sh);
                         st <= S_EA_VAL;
                     end
                 end
@@ -2086,7 +2103,7 @@ else if (ce) begin
                     d1t = disp_of(ea_ofs+2, modval2[6:5]);
                     dbus_req <= 1; dbus_we <= 0; dbus_size <= 2'd2;
                     dbus_addr <= rf_rdata_b + d1t;
-                    ea_addr <= (rf_rdata_a << ea_dim);  // index added after deref
+                    ea_addr <= (rf_rdata_a << ea_sh);  // index added after deref
                     ea_len  <= 5'd2 + disp_len(modval2[6:5]);
                     st <= S_EA_IND2;
                 end
@@ -2097,27 +2114,27 @@ else if (ce) begin
                     else case (modval2[3:0])
                     4'h0, 4'h1, 4'h2: begin
                         d1t = disp_of(ea_ofs+2, modval2[1:0]);
-                        ea_addr <= pc + d1t + (rf_rdata_a << ea_dim);
+                        ea_addr <= pc + d1t + (rf_rdata_a << ea_sh);
                         ea_len  <= 5'd2 + disp_len(modval2[1:0]);
                         if (ea_want_addr)
-                            complete_ea_now(pc + d1t + (rf_rdata_a << ea_dim),
+                            complete_ea_now(pc + d1t + (rf_rdata_a << ea_sh),
                                             1'b0, 1'b0, 5'd2 + disp_len(modval2[1:0]));
                         else begin
                             dbus_req <= 1'b1; dbus_we <= 1'b0; dbus_size <= ea_dim;
-                            dbus_addr <= pc + d1t + (rf_rdata_a << ea_dim);
+                            dbus_addr <= pc + d1t + (rf_rdata_a << ea_sh);
                             st <= S_EA_VAL;
                         end
                     end
                     4'h3: begin
                         d1t = fb32(ea_ofs+2);
-                        ea_addr <= d1t + (rf_rdata_a << ea_dim);
+                        ea_addr <= d1t + (rf_rdata_a << ea_sh);
                         ea_len  <= 5'd6;
                         if (ea_want_addr)
-                            complete_ea_now(d1t + (rf_rdata_a << ea_dim),
+                            complete_ea_now(d1t + (rf_rdata_a << ea_sh),
                                             1'b0, 1'b0, 5'd6);
                         else begin
                             dbus_req <= 1'b1; dbus_we <= 1'b0; dbus_size <= ea_dim;
-                            dbus_addr <= d1t + (rf_rdata_a << ea_dim);
+                            dbus_addr <= d1t + (rf_rdata_a << ea_sh);
                             st <= S_EA_VAL;
                         end
                     end
@@ -2125,7 +2142,7 @@ else if (ce) begin
                         d1t = disp_of(ea_ofs+2, modval2[1:0]);
                         dbus_req <= 1; dbus_we <= 0; dbus_size <= 2'd2;
                         dbus_addr <= pc + d1t;
-                        ea_addr <= (rf_rdata_a << ea_dim);
+                        ea_addr <= (rf_rdata_a << ea_sh);
                         ea_len  <= 5'd2 + disp_len(modval2[1:0]);
                         st <= S_EA_IND2;
                     end
@@ -2133,7 +2150,7 @@ else if (ce) begin
                         d1t = fb32(ea_ofs+2);
                         dbus_req <= 1; dbus_we <= 0; dbus_size <= 2'd2;
                         dbus_addr <= d1t;
-                        ea_addr <= (rf_rdata_a << ea_dim);
+                        ea_addr <= (rf_rdata_a << ea_sh);
                         ea_len  <= 5'd6;
                         st <= S_EA_IND2;
                     end

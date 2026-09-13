@@ -15,7 +15,7 @@ until Phase 3. Interleaves follow ms32.cpp: ROM_LOAD32_BYTE x4 for the
 program (map 0001/0010/0100/1000), ROM_LOAD32_WORD x2 for sprites
 (0021/2100). Rom index 1 is the mod byte: [1:0] the decryption key, bit 2
 ms32_invert_lines, bit 3 ROT270, bit 4 the 25-bit sprite mask (a sprite ROM over 16 MB),
-bit 7 holds the V70 (capture playback). The DIP switches are
+bit 5 mahjong inputs (the set's INPUT_PORTS include ms32_mahjong), bit 7 holds the V70 (capture playback). The DIP switches are
 extracted from ms32.cpp's INPUT_PORTS by scripts/extract_dips.py (Seta's parser).
 """
 import re
@@ -25,7 +25,7 @@ from xml.sax.saxutils import escape
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES  # noqa: E402
+from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES, CRCS  # noqa: E402
 import extract_dips  # noqa: E402
 import extract_romstart  # noqa: E402
 
@@ -55,19 +55,24 @@ def check_map():
         assert m and int(m.group(1).replace("_", ""), 16) == base, (name, base)
 
 
-def region_xml(region, size, parts):
-    """<part>/<interleave> elements for one region as the download stream expects it."""
+def region_xml(region, size, parts, crc):
+    """<part>/<interleave> elements for one region as the download stream expects it.
+    Every part carries its CRC from ROM_START: MiSTer finds a file by it when the name is not
+    at the zip's top level -- a merged parent zip keeps a clone's files under <clone>/, and
+    drops the ones equal to the parent's (tp2m32 in tetrisp2.zip)."""
     kinds = {k for _, _, k in parts}
+    def c(fn):
+        return f' crc="{crc[fn]:08x}"' if fn in crc else ""
     if kinds == {"L"}:
         parts_sorted = sorted(parts, key=lambda p: p[1])
         rom_len = sum(1 for _ in parts_sorted)   # not the length; repeat count derived below
-        one = "".join(f'      <part name="{fn}"/>\n' for fn, off, _ in parts_sorted)
+        one = "".join(f'      <part name="{fn}"{c(fn)}/>\n' for fn, off, _ in parts_sorted)
         return one
     if kinds == {"B"}:
         by_off = sorted(parts, key=lambda p: p[1])
         maps = {0: "0001", 1: "0010", 2: "0100", 3: "1000"}
         return '      <interleave output="32">\n' + "".join(
-            f'        <part name="{fn}" map="{maps[off & 3]}"/>\n' for fn, off, _ in by_off) + "      </interleave>\n"
+            f'        <part name="{fn}"{c(fn)} map="{maps[off & 3]}"/>\n' for fn, off, _ in by_off) + "      </interleave>\n"
     if kinds == {"W"}:
         # pairs at offsets (4k, 4k+2): each pair one interleave group
         groups = {}
@@ -77,8 +82,8 @@ def region_xml(region, size, parts):
         for base in sorted(groups):
             g = dict(groups[base])
             out += '      <interleave output="32">\n'
-            out += f'        <part name="{g[0]}" map="0021"/>\n'
-            out += f'        <part name="{g[2]}" map="2100"/>\n'
+            out += f'        <part name="{g[0]}"{c(g[0])} map="0021"/>\n'
+            out += f'        <part name="{g[2]}"{c(g[2])} map="2100"/>\n'
             out += "      </interleave>\n"
         return out
     raise ValueError(f"{region}: mixed part kinds {kinds}")
@@ -86,6 +91,21 @@ def region_xml(region, size, parts):
 
 def esc(s):
     return escape(str(s), {'"': "&quot;"})
+
+
+def uses_mahjong(game):
+    """True when the set's INPUT_PORTS reach ms32_mahjong through PORT_INCLUDEs."""
+    blocks = extract_dips.load()
+    seen, todo = set(), [INPUTS[game]]
+    while todo:
+        name = todo.pop()
+        if name == "ms32_mahjong":
+            return True
+        if name in seen or name not in blocks:
+            continue
+        seen.add(name)
+        todo += re.findall(r"PORT_INCLUDE\(\s*(\w+)\s*\)", blocks[name])
+    return False
 
 
 def switches_xml(game):
@@ -151,11 +171,15 @@ def main():
         key = KEY_INDEX[SET_KEY[game]]
         spr_size = by_name["sprite"][0]
         mod = (key | (0x04 if game in INVERT_LINES else 0) | (0x08 if game in ROT270 else 0)
-               | (0x10 if spr_size > 0x1000000 else 0) | (0x80 if cap else 0))
+               | (0x10 if spr_size > 0x1000000 else 0) | (0x20 if uses_mahjong(game) else 0) | (0x80 if cap else 0))
         xml.append(f'  <rom index="1"><part>{mod:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]}'
-                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", CPU held" if cap else ""} -->')
+                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", mahjong keys" if uses_mahjong(game) else ""}{", CPU held" if cap else ""} -->')
         zips = f"{game}.zip" + (f"|{PARENT[game]}.zip" if game in PARENT else "")
-        xml.append(f'  <rom index="0" zip="{zips}" md5="none">')
+        # address: the HPS writes the image into DDR3 and ms32_rom_loader copies it to SDRAM
+        # (MS32.sv, "FAST ROM LOAD"). Not for capture playback: the copy holds the video
+        # path in reset, which would clear the capture's registers.
+        addr = '' if cap else ' address="0x30000000"'
+        xml.append(f'  <rom index="0" zip="{zips}" md5="none"{addr}>')
         pos = 0
         for region, base, rsize in MAP:
             if region not in by_name:
@@ -163,7 +187,7 @@ def main():
             size, parts = by_name[region]
             if pos != base:
                 sys.exit(f"{game}: region {region} would start at {pos:#x}, map says {base:#x}")
-            body = region_xml(region, size, parts)
+            body = region_xml(region, size, parts, CRCS.get(game, {}))
             short = size - DATA_END[(game, region)]
             if short > 0:
                 body += f'      <part repeat="{short:#x}">00</part>\n'
@@ -185,6 +209,10 @@ def main():
             xml.append("\n".join(data[i:i + 64].hex() for i in range(0, len(data), 64)))
             xml.append("    </part>")
             xml.append("  </rom>")
+        if not cap:
+            # NVRAM, 0x2000 bytes at 0xC0000000: downloaded after the ROM on index 4,
+            # read back by the HPS when the core asks (MS32.sv, "NVRAM SAVE")
+            xml.append('  <nvram index="4" size="8192"/>')
         xml.append("</misterromdescription>")
         text = "\n".join(xml)
         assert text.index('<rom index="1">') < text.index('<rom index="0"'), "mod byte must precede rom index 0"

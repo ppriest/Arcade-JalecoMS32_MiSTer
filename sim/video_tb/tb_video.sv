@@ -140,8 +140,8 @@ end
 // on consecutive clocks; a write burst takes one beat per clock while WE
 // and !BUSY, then BUSY for DDR_BUSY clocks. Same protocol assumptions as
 // the RTL -- this model cannot prove them, only the board can.
-localparam [27:0] FB_BASE = 28'h1000000;
-reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF
+localparam [27:0] FB_BASE = 28'h2000000;
+reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF (DDRAM_ADDR's low 18 bits)
 reg        ddr_busy = 0;
 integer    ddr_busy_cnt = 0, ddr_rd_cnt = 0, ddr_rd_left = 0, ddr_wr_left = 0;
 reg [17:0] ddr_rd_word, ddr_wr_word;

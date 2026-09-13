@@ -127,6 +127,7 @@ HAND_SETS = {
 _DRIVER = extract_romstart.load()
 SETS = {k: v for k, v in extract_romstart.sets_table(_DRIVER).items() if k != "f1superb"}
 GAMES = extract_romstart.games(_DRIVER)
+CRCS = extract_romstart.crcs(_DRIVER)
 # MAME parents whose zip a clone's files may be merged into
 PARENT = {k: g["parent"] for k, g in GAMES.items() if g["parent"] != "0"}
 # ms32_invert_lines: vblank and field swap levels
@@ -169,12 +170,43 @@ def decrypt(src, taps, addr_xor, data_xor, top_mask):
     return bytes(out)
 
 
-def find_zip(name, repo):
+class RomSet:
+    """A set's files from its own zip and its parent's, found by name, by name in a
+    subdirectory (MAME's merged sets keep a clone's files under <clone>/), or by CRC
+    (a merged set drops a clone's file that equals one of the parent's)."""
+
+    def __init__(self, game, repo):
+        self.game = game
+        self.zips = []
+        for n in (game, PARENT.get(game)):
+            p = find_zip(n, repo, required=False) if n else None
+            if p:
+                self.zips.append(zipfile.ZipFile(p))
+        if not self.zips:
+            sys.exit(f"{game}.zip not on rompath")
+
+    def read(self, name):
+        want = CRCS.get(self.game, {}).get(name)
+        for z in self.zips:
+            for info in z.infolist():
+                if info.filename == name or info.filename.endswith("/" + name):
+                    return z.read(info)
+        if want is not None:
+            for z in self.zips:
+                for info in z.infolist():
+                    if info.CRC == want:
+                        return z.read(info)
+        raise KeyError(f"{self.game}: {name} not found by name or CRC")
+
+
+def find_zip(name, repo, required=True):
     for d in rompath(repo).split(";"):
         p = Path(d) / f"{name}.zip"
         if p.exists():
             return p
-    sys.exit(f"{name}.zip not on rompath")
+    if required:
+        sys.exit(f"{name}.zip not on rompath")
+    return None
 
 
 def build(region, size, parts, zf):
@@ -199,7 +231,8 @@ def main():
     repo = Path(__file__).resolve().parent.parent
     out = repo / "roms" / game
     out.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(find_zip(game, repo)) as zf:
+    zf = RomSet(game, repo)
+    if True:
         for region, size, parts in SETS[game]:
             if only and region != only:
                 continue

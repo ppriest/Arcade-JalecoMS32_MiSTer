@@ -781,21 +781,24 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 
 ## Next steps
 
-The five original steps (project rename, script ports, MAME captures, the decryption check, Phase 0)
-are done, and so is the board check of the video path: all three ROMs-plus-capture `.mra` files
-render pixel-exact against the model, ROMs through SDRAM with the tile decryption, sprite frame
-buffer on DDR3 (`docs/phase1_video.md`, "On the board"). What follows:
+Phase 0, Phase 1 and most of Phase 2 are done. On the DE10-nano: `tetrisp` is playable; `p47aces`,
+`gametngk`, `hayaosi2`, `tp2m32` and `suchie2` run their attract modes; the mahjong sets read a
+keyboard as their key matrix (A, B and N checked in `suchie2`'s service menu); ROMs load through DDR3 (`ms32_rom_loader`);
+NVRAM is saved to `config/nvram`; every in-scope set has a generated `.mra` with DIP menus, loading
+from split or merged zips; HDMI rotation and Flip 180 are in the OSD. Phase 3 has its CPU side: the
+Z80 (T80) with RAM, banks, latches and the YMF271's timers, whose writes match MAME's over 12 s of
+`tetrisp` in `sim/sound_tb` (the order of four timer A/B acknowledge pairs aside). What follows:
 
-1. **Implement fast DDRAM load.** The 27 MB set goes through `hps_io`'s byte stream today; on the
-   board the MiSTer's command pipe stayed blocked for 20 to 30 seconds during the transfer. Psikyo's
-   `rom_loader.sv` is the model: the HPS writes the whole `.mra` stream into DDR3 in one go and the
-   core copies it to SDRAM. Here the copier must apply the tile decryption, so the address scramble
-   moves from `ms32_sdram_top`'s ioctl stage to the copier.
-2. **Object RAM copy to DDR3.** Approved: the vblank copy is read sequentially once per frame, so it
-   can leave M10K (64 blocks) for the DDR3 window, written as bursts at vblank and read back in
-   8-record bursts. That leaves room for work RAM, Z80 RAM and NVRAM.
-3. **Phase 2 CPU integration.** `ms32_v70_bus` on the RAMs and registers, the sysctrl interrupt
-   controller (levels, acks, `invert_lines`), the instruction cache on SDRAM port 2, inputs and
-   DIPs, `tetrisp` booting on the board.
+1. **`tp2m32`'s remaining frame difference.** It runs its attract mode on the board (title, versus
+   demo, score ranking) after two fixes: the interrupt acknowledges under `invert_lines`, and the V70
+   core's `MOVD` qword operands. In simulation its frame-1200 tile, line, palette and priority RAMs
+   equal MAME's; one animated sprite (256) is a step behind, and 1,030 pixels of the `2` logo's
+   outline differ.
+2. **Phase 3: the YMF271 synthesis**, ported from the Seibu SPI core (see "The YMF271") once its
+   LICENSE is committed upstream (still absent when last checked), with its 4 MB sample ROM in
+   DDR3, and the audio output.
+3. **The games' Flip Screen DIP** (sysctrl control bit 1). MAME flips the tilemaps and not the
+   sprites, so its behaviour would draw a broken picture; decide what to follow and record it in
+   `docs/MAME_DIVERGENCE.md` (Phase 4).
 4. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
    `wr_stall_cycles` growing, row bursts are the next transport change.

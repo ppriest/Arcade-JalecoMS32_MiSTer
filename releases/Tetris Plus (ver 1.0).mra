@@ -26,41 +26,42 @@
     <dip name="Language" bits="23" ids="English,Japanese"/>
   </switches>
   <rom index="1"><part>01</part></rom>   <!-- mod byte: key ss92046_01 -->
-  <rom index="0" zip="tetrisp.zip" md5="none">
+  <rom index="0" zip="tetrisp.zip" md5="none" address="0x30000000">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
-        <part name="mb93166_ver1.0-29.29" map="0001"/>
-        <part name="mb93166_ver1.0-28.28" map="0010"/>
-        <part name="mb93166_ver1.0-27.27" map="0100"/>
-        <part name="mb93166_ver1.0-26.26" map="1000"/>
+        <part name="mb93166_ver1.0-29.29" crc="43a61941" map="0001"/>
+        <part name="mb93166_ver1.0-28.28" crc="87522e16" map="0010"/>
+        <part name="mb93166_ver1.0-27.27" crc="2d69b6d3" map="0100"/>
+        <part name="mb93166_ver1.0-26.26" crc="d318a9ba" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
-      <part name="mb93166_ver1.0-30.30"/>
+      <part name="mb93166_ver1.0-30.30" crc="cea7002d"/>
     <!-- bgtiles: 0x200000 bytes at 0x280000, repeated 2x -->
-      <part name="mr95024-03.10"/>
-      <part name="mr95024-03.10"/>
+      <part name="mr95024-03.10" crc="a03e4a8d"/>
+      <part name="mr95024-03.10" crc="a03e4a8d"/>
     <!-- roztiles: 0x200000 bytes at 0x680000, repeated 2x -->
-      <part name="mr95024-04.11"/>
-      <part name="mr95024-04.11"/>
+      <part name="mr95024-04.11" crc="c0d5246f"/>
+      <part name="mr95024-04.11" crc="c0d5246f"/>
     <!-- sprite: 0x400000 bytes at 0xa80000, repeated 4x, then 0x100000 bytes of zeros (a partial repeat cannot be expressed; tiles past the ROM read as pen 0 here where MAME wraps) -->
       <interleave output="32">
-        <part name="mr95024-02.13" map="0021"/>
-        <part name="mr95024-01.01" map="2100"/>
+        <part name="mr95024-02.13" crc="4a825990" map="0021"/>
+        <part name="mr95024-01.01" crc="cb0e92b9" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr95024-02.13" map="0021"/>
-        <part name="mr95024-01.01" map="2100"/>
+        <part name="mr95024-02.13" crc="4a825990" map="0021"/>
+        <part name="mr95024-01.01" crc="cb0e92b9" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr95024-02.13" map="0021"/>
-        <part name="mr95024-01.01" map="2100"/>
+        <part name="mr95024-02.13" crc="4a825990" map="0021"/>
+        <part name="mr95024-01.01" crc="cb0e92b9" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr95024-02.13" map="0021"/>
-        <part name="mr95024-01.01" map="2100"/>
+        <part name="mr95024-02.13" crc="4a825990" map="0021"/>
+        <part name="mr95024-01.01" crc="cb0e92b9" map="2100"/>
       </interleave>
       <part repeat="0x100000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
-      <part name="mb93166_ver1.0-21.21"/>
+      <part name="mb93166_ver1.0-21.21" crc="5c565e3b"/>
   </rom>
+  <nvram index="4" size="8192"/>
 </misterromdescription>

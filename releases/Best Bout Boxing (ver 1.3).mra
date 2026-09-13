@@ -28,44 +28,45 @@
     <dip name="Jyoji's Attacking Power" bits="23" ids="Harder,Normal"/>
   </switches>
   <rom index="1"><part>11</part></rom>   <!-- mod byte: key ss92046_01 -->
-  <rom index="0" zip="bbbxing.zip" md5="none">
+  <rom index="0" zip="bbbxing.zip" md5="none" address="0x30000000">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
-        <part name="mb93138a_31_ver1.3.31" map="0001"/>
-        <part name="mb93138a_29_ver1.3.29" map="0010"/>
-        <part name="mb93138a_27_ver1.3.27" map="0100"/>
-        <part name="mb93138a_25_ver1.3.25" map="1000"/>
+        <part name="mb93138a_31_ver1.3.31" crc="e0c865ed" map="0001"/>
+        <part name="mb93138a_29_ver1.3.29" crc="85bbbe79" map="0010"/>
+        <part name="mb93138a_27_ver1.3.27" crc="45b27ad8" map="0100"/>
+        <part name="mb93138a_25_ver1.3.25" crc="b526b41e" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
-      <part name="mr92042-01.32"/>
+      <part name="mr92042-01.32" crc="3ffdae75"/>
     <!-- bgtiles: 0x200000 bytes at 0x280000, repeated 2x -->
-      <part name="mr92042-04.11"/>
-      <part name="mr92042-04.11"/>
+      <part name="mr92042-04.11" crc="85238ca9"/>
+      <part name="mr92042-04.11" crc="85238ca9"/>
     <!-- roztiles: 0x200000 bytes at 0x680000, repeated 2x -->
-      <part name="mr92042-05.9"/>
-      <part name="mr92042-05.9"/>
+      <part name="mr92042-05.9" crc="a41cb650"/>
+      <part name="mr92042-05.9" crc="a41cb650"/>
     <!-- sprite: 0x1100000 bytes at 0xa80000, repeated 1x -->
       <interleave output="32">
-        <part name="mr92042-06.13" map="0021"/>
-        <part name="mr92042-07.1" map="2100"/>
+        <part name="mr92042-06.13" crc="4b8c1574" map="0021"/>
+        <part name="mr92042-07.1" crc="c1c10c3b" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr92042-08.14" map="0021"/>
-        <part name="mr92042-09.2" map="2100"/>
+        <part name="mr92042-08.14" crc="e9cfd83b" map="0021"/>
+        <part name="mr92042-09.2" crc="03b77c1e" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr92042-10.15" map="0021"/>
-        <part name="mr92042-11.3" map="2100"/>
+        <part name="mr92042-10.15" crc="6ab64a10" map="0021"/>
+        <part name="mr92042-11.3" crc="bba0d1a4" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mr92042-12.16" map="0021"/>
-        <part name="mr92042-13.4" map="2100"/>
+        <part name="mr92042-12.16" crc="e001d6cb" map="0021"/>
+        <part name="mr92042-13.4" crc="97f97e3a" map="2100"/>
       </interleave>
       <interleave output="32">
-        <part name="mb93138a_17_ver1.0.17" map="0021"/>
-        <part name="mb93138a_5_ver1.0.5" map="2100"/>
+        <part name="mb93138a_17_ver1.0.17" crc="1d7ebaf0" map="0021"/>
+        <part name="mb93138a_5_ver1.0.5" crc="64989edf" map="2100"/>
       </interleave>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
-      <part name="mb93138a_21_ver1.0.21"/>
+      <part name="mb93138a_21_ver1.0.21" crc="5f3ea01f"/>
   </rom>
+  <nvram index="4" size="8192"/>
 </misterromdescription>

@@ -32,21 +32,22 @@ The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM m
 | Tetris Plus (ver 1.0) | 1995 | Jaleco / BPS | SS92046-01 | Playable, silent |
 | P-47 Aces (ver 1.1) | 1995 | Jaleco | SS92048-01 | Attract mode runs on the board |
 | The Game Paradise - Master of Shooting! (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Attract mode runs on the board |
-| Hayaoshi Quiz Grand Champion Taikai | 1994 | Jaleco | SS92046-01 | Phase 2 target |
-| Tetris Plus 2 (ver 1.0, MegaSystem 32 Version) | 1997 | Jaleco | SS91022-10 | Phase 2 target; swapped vblank/field interrupts |
+| Hayaoshi Quiz Grand Champion Taikai | 1994 | Jaleco | SS92046-01 | Attract mode runs on the board |
+| Tetris Plus 2 (ver 1.0, MegaSystem 32 Version) | 1997 | Jaleco | SS91022-10 | Swapped vblank/field interrupts. Attract mode runs on the board |
 | Hayaoshi Quiz Nettou Namahousou (ver 1.5) | 1994 | Jaleco | SS92046-01 | |
 | Best Bout Boxing (ver 1.3) | 1994 | Jaleco | SS92046-01 | 17 MB of sprites: mod byte selects a 25-bit sprite mask |
 | Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270 |
 | Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | |
 | World PK Soccer V2 (ver 1.1) | 1996 | Jaleco | SS92046-01 | Swapped vblank/field interrupts |
-| Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong inputs |
-| Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong inputs |
-| Ryuusei Janshi Kirara Star (ver 1.0) | 1996 | Jaleco | SS92047-01 | Mahjong inputs |
-| Vs. Janshi Brandnew Stars (Ver 1.1, MegaSystem 32 Version) | 1997 | Jaleco | SS92046-01 | Mahjong inputs |
+| Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong keys from a keyboard. Attract mode and service menu run on the board |
+| Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
+| Ryuusei Janshi Kirara Star (ver 1.0) | 1996 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
+| Vs. Janshi Brandnew Stars (Ver 1.1, MegaSystem 32 Version) | 1997 | Jaleco | SS92046-01 | Mahjong keys from a keyboard |
 
 "Key" is the cartridge's decryption chip, which selects the tile ROM key. Clones have `.mra` files in
-`releases/_alternatives/`. The streams of the twelve sets whose zips were available were checked
-byte for byte against images built from `ROM_START`; the clones' were not.
+`releases/_alternatives/`. Every `<part>` carries its CRC, so a clone loads from its own zip or from
+a merged parent zip. The streams of all twenty sets were checked byte for byte against images built
+from `ROM_START`.
 
 ### Out of scope for now
 
@@ -63,8 +64,8 @@ byte for byte against images built from `ROM_START`; the clones' were not.
 | System controller | CRTC, interrupts, timer | Written |
 | Tilemaps, ROZ, sprites, mixer | Video | Written, pixel-exact against MAME on seven captures |
 | Cartridge decryption chip | Tile ROM encryption | Decrypted in the download path |
-| Z80 | Sound CPU, 8 MHz | |
-| YMF271 | FM + PCM sound | |
+| Z80 | Sound CPU, 8 MHz | T80, with its RAM, banks and latches; its writes match MAME's over 12 s of `tetrisp` |
+| YMF271 | FM + PCM sound | Timers and status only (the driver polls them); no synthesis yet, so no audio |
 
 ## History
 
@@ -78,30 +79,34 @@ No release yet.
 
 Development `.mra` files (capture playback) are in `releases/_dev/`.
 
+The mahjong sets take a PS/2 or USB keyboard with MAME's default keys: A-N for the tiles, Left Ctrl
+Kan, Left Alt Pon, Space Chi, Left Shift Reach, Z Ron, 1 Start (joystick Start works too). Coins
+stay on the joystick.
+
 ## Status
 
 The video path renders MAME captures pixel-exact on the board from the real ROMs. In simulation
 the whole board (V70, memory map, interrupts, video) runs `tetrisp` from reset to its title screen,
 pixel-exact against MAME at frame 1200. On the board `tetrisp` is playable, P-47 Aces and The Game
-Paradise run their attract modes; there is no sound. Every in-scope set has a generated `.mra`,
-with DIP menus from MAME's input ports; HDMI rotation and Flip 180 are in the OSD. The games' own
-Flip Screen DIP does nothing yet.
+Paradise and Tetris Plus 2 run their attract modes; the sound CPU runs but there is no audio yet. Every in-scope set has a generated `.mra`,
+with DIP menus from MAME's input ports; HDMI rotation and Flip 180 are in the OSD. ROMs load through
+DDR3 (`address="0x30000000"`), and NVRAM is saved to `config/nvram` when the OSD opens. The games'
+own Flip Screen DIP does nothing: MAME's flips the tilemaps and not the sprites.
 
 ### Todo
 
-- [ ] `hayaosi2` and `tp2m32`
-- [ ] Fast DDR3 ROM load
-- [ ] Z80 and YMF271
+- [x] Z80
+- [ ] YMF271 synthesis (the Seibu SPI core's, once its licence is committed)
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
-- [ ] Mahjong inputs, NVRAM saving
+- [x] Mahjong inputs
 
 ### Resource usage
 
-`MS32_stp` at commit `2d89d7e`, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
+`MS32_stp` at commit `91f3146`, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 31,849 (76%) | 41,910 |
+| Logic (ALMs) | 32,111 (77%) | 41,910 |
 | Block memory bits | 4,139,457 (73%) | 5,662,720 |
 | RAM blocks | 519 (94%) | 553 |
 | DSP blocks | 49 (44%) | 112 |
@@ -145,7 +150,9 @@ where they matter.
   * The CPU is diffed against a MAME bus trace of `tetrisp`'s boot, access by access
   * The video path is diffed against MAME's own screenshots of captured frames, in simulation and
     on the board
-  * The whole board is diffed against MAME's frame 1200 of `tetrisp`
+  * The whole board is diffed against MAME's frame 1200 of `tetrisp`, and its video RAMs against
+    MAME's at frame 1200 of `tp2m32`
+  * The sound CPU's bus is diffed against a timestamped MAME trace of `tetrisp`
   * The `.mra` files are generated from `ROM_START`
 
 ## Acknowledgements

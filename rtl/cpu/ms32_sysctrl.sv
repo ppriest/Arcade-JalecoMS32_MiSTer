@@ -9,8 +9,8 @@
 // core adds 0x40 to the vector itself. Sources and the levels they set:
 //   0  programmable timer        (jaleco_ms32_sysctrl prg_timer_cb)
 //   1  sound CPU wrote to_main   (cleared by reading 0xFD000000)
-//   9  field, 30 Hz              (10 with invert_lines)
-//   10 vblank                    (9 with invert_lines)
+//   9  field, 30 Hz              (vblank with invert_lines)
+//   10 vblank                    (field with invert_lines)
 // Acks are writes to the sysctrl block (byte offsets into 0xFCE00000; the
 // amap is 16-bit behind umask32, so amap slot k is at 4*(k/2)):
 //   0x00 control: bit 3 timer enable   0x30 timer interval   0x34 timer ack
@@ -85,8 +85,11 @@ module ms32_sysctrl #(
 	wire [3:0] vbl_level = invert_lines ? 4'd9  : 4'd10;
 	wire [3:0] fld_level = invert_lines ? 4'd10 : 4'd9;
 
-	// the ack lines name the callback, not the level: vblank_ack clears
-	// whichever level the vblank callback drives
+	// invert_lines swaps which event raises which level; the acks do not
+	// move. jaleco_ms32_sysctrl calls m_field_cb at the vblank line when
+	// inverted, and ms32.cpp wires m_vblank_cb to level 10 and m_field_cb to
+	// level 9 unconditionally, so vblank_ack (m_vblank_cb(0)) clears 10 and
+	// field_ack clears 9 on every set.
 	logic [15:0] set_m, clr_m;
 	always_comb begin
 		set_m = 16'h0000;
@@ -99,8 +102,8 @@ module ms32_sysctrl #(
 		// write clearing bit 3, or an interval write while disabled
 		if (w_tack || (w_ctrl && !wr_data[3]) || (w_intv && !timer_en)) clr_m[0] = 1'b1;
 		if (sound_irq_clr) clr_m[1] = 1'b1;
-		if (w_vack || w_iack) clr_m[vbl_level] = 1'b1;
-		if (w_fack || w_iack) clr_m[fld_level] = 1'b1;
+		if (w_vack || w_iack) clr_m[10] = 1'b1;
+		if (w_fack || w_iack) clr_m[9]  = 1'b1;
 	end
 
 	always_ff @(posedge clk) begin

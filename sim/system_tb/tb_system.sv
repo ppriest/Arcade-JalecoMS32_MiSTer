@@ -14,6 +14,10 @@
 //             in the MAME tap format, for scripts/compare_boot_trace.py
 //  +DSW=hex   the DIP word (default FF7FFFFF, what MAME's tetrisp read)
 //  +LAT=N     ROM model latency in clk_sys clocks (default 12)
+//  +INV       ms32_invert_lines, as the mod byte sets it for tp2m32
+//  +MJ        mahjong inputs (mod byte bit 5), no key pressed
+//  +DUMP      with the frame, write the video RAMs to <OUT>/<ram>.bin in
+//             mame_capture.py's layout (one little-endian dword per u16)
 `timescale 1ns/1ps
 
 module tb_system;
@@ -27,6 +31,7 @@ reg reset = 1, cpu_run = 0;
 string  GAME, OUTDIR;
 integer LAT, FRAME, TRACE;
 reg [31:0] DSW;
+reg        INV = 0, MJ = 0;
 
 // ------------------------------------------------------------- ROMs
 reg [7:0]  prgrom [0:(1 << 21) - 1];
@@ -54,8 +59,10 @@ wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 wire [31:0] pc;
 
 ms32_core u_core (
-	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(reset), .cpu_run(cpu_run), .invert_lines(1'b0),
-	.inputs(32'hFFFF_FFFF), .dsw(DSW),
+	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(reset), .cpu_run(cpu_run), .invert_lines(INV),
+	.inputs(32'hFFFF_FFFF), .dsw(DSW), .mahjong(MJ), .mj_keys({30{1'b1}}),
+	.nv_addr(13'd0), .nv_rdata(), .nv_written(),
+	.snd_reset(), .snd_cmd_we(), .snd_cmd_data(), .snd_tomain_we(1'b0), .snd_tomain_data(8'h00),
 	.ld_req(1'b0), .ld_addr(32'd0), .ld_be(4'd0), .ld_data(32'd0), .ld_ack(),
 	.prg_req(pg_req),  .prg_addr(pg_addr), .prg_valid(pg_valid), .prg_data(pg_data),
 	.tx_req(tx_req),   .tx_addr(tx_addr),  .tx_valid(tx_valid),  .tx_data(tx_data),
@@ -101,9 +108,9 @@ end
 
 // ------------------------------------------------------------ DDRAM model
 // sim/video_tb's model with a busy time of 6 and a read latency of 20.
-localparam [27:0] FB_BASE = 28'h1000000;
+localparam [27:0] FB_BASE = 28'h2000000;
 localparam integer DDR_BUSY = 6, DDR_LAT = 20;
-reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF
+reg [63:0] ddr [0:262143];   // 18-bit word index: frame buffer 0x00000-0x0FFFF, object copy 0x20000-0x21FFF (DDRAM_ADDR's low 18 bits)
 reg        ddr_busy = 0;
 integer    ddr_busy_cnt = 0, ddr_rd_cnt = 0, ddr_rd_left = 0, ddr_wr_left = 0, j;
 reg [17:0] ddr_rd_word, ddr_wr_word;
@@ -166,6 +173,26 @@ always @(posedge clk) if (vblank_ev && (frame % 60) == 59)
 	         frame + 1, pc, u_core.u_sys.dbg_accesses, irqs, u_core.u_sys.dbg_cache_hits, u_core.u_sys.dbg_cache_misses,
 	         tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr);
 
+// ------------------------------------------------------------- RAM dumps
+task dump16(input string name, input integer aw);
+	integer fdd, w;
+	reg [15:0] v;
+	begin
+		fdd = $fopen({OUTDIR, "/", name, ".bin"}, "wb");
+		for (w = 0; w < (1 << aw); w = w + 1) begin
+			if (name == "txram")      v = u_core.u_video.u_txram.mem[w];
+			else if (name == "bgram") v = u_core.u_video.u_bgram.mem[w];
+			else if (name == "rozram") v = u_core.u_video.u_rozram.mem[w];
+			else if (name == "sprram") v = u_core.u_video.u_objram.u_live.mem[w];
+			else if (name == "palram") v = w[0] ? u_core.u_video.u_pal1.mem[w >> 1] : u_core.u_video.u_pal0.mem[w >> 1];
+			else if (name == "priram") v = {8'h00, u_core.u_video.u_priram.mem[w]};
+			else                      v = u_core.u_video.u_lineram.mem[w];
+			$fwrite(fdd, "%c%c%c%c", v[7:0], v[15:8], 8'h00, 8'h00);
+		end
+		$fclose(fdd);
+	end
+endtask
+
 // ------------------------------------------------------------- run
 integer n, k, fd;
 initial begin
@@ -175,6 +202,8 @@ initial begin
 	if (!$value$plusargs("TRACE=%d", TRACE)) TRACE = 0;
 	if (!$value$plusargs("DSW=%h", DSW))    DSW = 32'hFF7F_FFFF;
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/system-", GAME};
+	INV = $test$plusargs("INV");
+	MJ  = $test$plusargs("MJ");
 
 	for (k = 0; k < (1 << 21); k = k + 1) prgrom[k] = 8'hCD;
 	fd = $fopen({"roms/", GAME, "/maincpu.bin"}, "rb"); if (fd == 0) begin $display("FATAL no maincpu.bin"); $finish; end
@@ -186,8 +215,8 @@ initial begin
 	if ((n & (n - 1)) != 0) sprrom_mask = (1 << $clog2(n)) - 1;
 	for (k = 0; k < 262144; k = k + 1) ddr[k] = 64'd0;
 	for (k = 0; k < 320*224; k = k + 1) out[k] = 24'h000000;
-	$display("%s: reset vector bytes %02x %02x %02x %02x, frame %0d, LAT %0d, DSW %08x",
-	         GAME, prgrom[21'h1FFFF0], prgrom[21'h1FFFF1], prgrom[21'h1FFFF2], prgrom[21'h1FFFF3], FRAME, LAT, DSW);
+	$display("%s: reset vector bytes %02x %02x %02x %02x, frame %0d, LAT %0d, DSW %08x, INV %0d",
+	         GAME, prgrom[21'h1FFFF0], prgrom[21'h1FFFF1], prgrom[21'h1FFFF2], prgrom[21'h1FFFF3], FRAME, LAT, DSW, INV);
 	if (TRACE > 0) begin
 		ftr = $fopen({"debug/", GAME, "-boot/rtl_sys.trace"}, "w");
 		$fdisplay(ftr, "# RTL bus accesses from reset, in order (%s, system bench).", GAME);
@@ -207,6 +236,10 @@ initial begin
 	$display("frame %0d written to %s; pc %08x, %0d accesses, %0d interrupts; overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d bad_primask=%0d",
 	         FRAME, OUTDIR, pc, u_core.u_sys.dbg_accesses, irqs, tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm);
 	if (ftr != 0) $fclose(ftr);
+	if ($test$plusargs("DUMP")) begin
+		dump16("txram", 13); dump16("bgram", 13); dump16("rozram", 15); dump16("lineram", 11);
+		dump16("sprram", 15); dump16("palram", 16); dump16("priram", 13);
+	end
 	$finish;
 end
 
