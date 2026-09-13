@@ -81,7 +81,7 @@ from `ROM_START`.
 
 ## History
 
-* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`) **Beta**
+* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`) **Alpha**
   * First release
   * Sound: Good in Desert War and Tetris Plus 2. Cuts out in Gratia
   * Games appear playable
@@ -97,6 +97,9 @@ from `ROM_START`.
 ## Status
 
 Initial release. Much untested.
+
+* Sound cuts out or doesn't play in many games
+* World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
 
 ### Todo
 
