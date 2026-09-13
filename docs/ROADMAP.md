@@ -795,10 +795,12 @@ aside), and the YMF271 with its sample ROM in SDRAM. What follows:
    core's `MOVD` qword operands. In simulation its frame-1200 tile, line, palette and priority RAMs
    equal MAME's; one animated sprite (256) is a step behind, and 1,030 pixels of the `2` logo's
    outline differ.
-2. **Gratia's sound cuts out** on the board (by ear). Desert War and Tetris Plus 2 sound good. The
-   YMF271 is the Seibu SPI core's (see "The YMF271"), on a half-rate clock enable; over 30 s of
-   `tetrisp` in `sim/ymf_tb` its spectrum correlates with MAME's at 0.93-1.00 per second, the low
-   seconds starting at key-on and key-off writes. RAM blocks are at 553 of 553.
+2. **Recheck sound across the game list.** Sound cut out or was missing in several games (Gratia,
+   Hayaoshi Quiz Grand Champion Taikai, The Game Paradise) because the V70 wrote each command pair
+   8 us apart and the second byte overwrote the first before the Z80 read it; the V70 now waits
+   40 us after a sound command, as MAME's `sound_command_w` does. In simulation Gratia's YMF271
+   alone (no overrun at 48 MHz, spectrum r 0.95-1.00) and its Z80 side (3,327 writes identical to
+   MAME's) were both right. RAM blocks are at 553 of 553.
 3. **The games' Flip Screen DIP** (sysctrl control bit 1). MAME flips the tilemaps and not the
    sprites, so its behaviour would draw a broken picture; decide what to follow and record it in
    `docs/MAME_DIVERGENCE.md` (Phase 4).

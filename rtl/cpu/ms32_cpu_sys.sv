@@ -29,7 +29,11 @@
 // CAPTURE PLAYBACK. While the core is held in reset (cpu_run low) the bus
 // belongs to the capture loader, whose writes arrive from clk_sys at real
 // CPU addresses: playback exercises the same decode the game does.
-module ms32_cpu_sys (
+module ms32_cpu_sys #(
+	// ms32.cpp sound_command_w spins the V70 for 40 us after a latch write "to
+	// give the Z80 time to respond"; 800 clk_cpu clocks at 20 MHz
+	parameter int SND_SPIN = 800
+) (
 	input  logic        clk_cpu,
 	input  logic        clk_sys,
 	input  logic        rst_sys,          // clk_sys: whole block (not held by a capture load)
@@ -195,7 +199,8 @@ module ms32_cpu_sys (
 	} region_t;
 	region_t rsel;
 
-	typedef enum logic [2:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN} bst_t;
+	typedef enum logic [2:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN, B_SPIN} bst_t;
+	logic [9:0] spin_cnt;
 	bst_t bst;
 	wire accept = (bst == B_IDLE) && m_req && !m_ack;
 	wire wr     = accept && m_we;
@@ -323,6 +328,11 @@ module ms32_cpu_sys (
 				        is_tx ? R_TX : is_bg ? R_BG : (is_regs && regs_rd) ? R_REGS :
 				        is_inputs ? R_IN : is_dsw ? R_DSW : is_sndres ? R_SND : R_NONE;
 				if (is_rom && !m_we) begin d_req <= 1'b1; bst <= B_ROM; end
+				// A sound command holds the bus for SND_SPIN clocks before it is
+				// acknowledged. Without it the games' command pairs (prefix, then
+				// parameter) arrived 8 us apart and the Z80, which takes the latch
+				// about 10 us after a write, lost the first of each pair.
+				else if (is_sndcmd && m_we && !ld_owns) begin spin_cnt <= 10'(SND_SPIN); bst <= B_SPIN; end
 				else bst <= B_ACK;
 			end
 			B_ACK: begin
@@ -351,6 +361,7 @@ module ms32_cpu_sys (
 				m_ack   <= 1'b1;
 				bst     <= B_DRAIN;
 			end
+			B_SPIN: if (spin_cnt == 10'd0) bst <= B_ACK; else spin_cnt <= spin_cnt - 10'd1;
 			B_DRAIN: bst <= B_IDLE;
 			default: bst <= B_IDLE;
 		endcase

@@ -49,7 +49,7 @@ The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
 | Hayaoshi Quiz Nettou Namahousou (ver 1.5) | 1994 | Jaleco | SS92046-01 | |
 | Best Bout Boxing (ver 1.3) | 1994 | Jaleco | SS92046-01 | 17 MB of sprites: mod byte selects a 25-bit sprite mask |
 | Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Sound good |
-| Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | Sound cuts out |
+| Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | |
 | World PK Soccer V2 (ver 1.1) | 1996 | Jaleco | SS92046-01 | Swapped vblank/field interrupts |
 | Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong keys from a keyboard. Attract mode and service menu run on the board |
 | Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
@@ -81,9 +81,11 @@ from `ROM_START`.
 
 ## History
 
-* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`) **Alpha**
+* **`Arcade-JalecoMS32_20260913.rbf`** (commit `4be9bdf`) **Alpha**
   * First release
-  * Sound: Good in Desert War and Tetris Plus 2. Cuts out in Gratia
+  * Sound: Good in Desert War and Tetris Plus 2
+  * Sound commands no longer lost: the V70 waits 40 us after each one, as MAME does. Before this
+    Hayaoshi Quiz Grand Champion Taikai was silent and The Game Paradise made only occasional sounds
   * Games appear playable
   * Keyboard controls map to Mahjong keys
   * NVRAM, DIP menus, HDMI rotation/flip 180
@@ -98,12 +100,12 @@ from `ROM_START`.
 
 Initial release. Much untested.
 
-* Sound cuts out or doesn't play in many games
+* Sound is not yet rechecked in every game since the lost-command fix
 * World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
 
 ### Todo
 
-- [ ] Gratia: sound cuts out
+- [ ] Recheck sound across the game list
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
 - [x] Mahjong inputs
 - [ ] CRT Offset
@@ -113,12 +115,12 @@ Initial release. Much untested.
 
 ### Resource usage
 
-`MS32` at commit `ceab497` (the 20260913 release), on the DE10-nano's Cyclone V 5CSEBA6, speed
-grade 7; clk_sys setup slack +0.129 ns:
+`MS32` at commit `4be9bdf` (the 20260913 release, fitter seed 3), on the DE10-nano's Cyclone V
+5CSEBA6, speed grade 7; clk_sys setup slack +0.029 ns:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 35,202 (84%) | 41,910 |
+| Logic (ALMs) | 35,315 (84%) | 41,910 |
 | Block memory bits | 4,309,048 (76%) | 5,662,720 |
 | RAM blocks | 553 (100%) | 553 |
 | DSP blocks | 58 (52%) | 112 |

@@ -159,6 +159,15 @@ always @(posedge clk_cpu) begin
 	end
 end
 
+// ------------------------------------------------------------- sound commands
+// every V70 write to the sound latch, with the time since the previous one
+realtime snd_t_last = 0;
+always @(posedge clk_cpu)
+	if (u_core.u_sys.wr && u_core.u_sys.is_sndcmd && !u_core.u_sys.ld_owns) begin
+		$display("sndcmd %02x at %.6f s (+%.1f us)", u_core.u_sys.m_wdata[7:0], $realtime / 1e9, ($realtime - snd_t_last) / 1e3);
+		snd_t_last = $realtime;
+	end
+
 // ------------------------------------------------------------- frames
 reg [23:0] out [0:320*224-1];
 integer frame = 0, irqs = 0;
