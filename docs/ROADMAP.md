@@ -802,5 +802,7 @@ aside), and the YMF271 with its sample ROM in SDRAM. What follows:
 3. **The games' Flip Screen DIP** (sysctrl control bit 1). MAME flips the tilemaps and not the
    sprites, so its behaviour would draw a broken picture; decide what to follow and record it in
    `docs/MAME_DIVERGENCE.md` (Phase 4).
-4. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
+4. **Mahjong coin keys.** On the mahjong sets keyboard `5` should insert coin 1 and `6` coin 2
+   (MAME's defaults), beside the key matrix; today coins come only from the joystick.
+5. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
    `wr_stall_cycles` growing, row bursts are the next transport change.

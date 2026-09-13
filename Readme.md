@@ -6,6 +6,7 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 ## Contents
 
 - [Games](#games)
+  - [Game Notes](#game-notes)
   - [Supported](#supported)
   - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
@@ -22,9 +23,19 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 
 ## Games
 
-The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM module
-(`docs/ROADMAP.md`, "Game scope"). Tetris Plus is playable; sound has been checked by ear in Desert War and
-Tetris Plus 2.
+The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM module (`docs/ROADMAP.md`, "Game scope").
+
+### Game Notes
+
+The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
+* A-N for the tiles
+* Left Ctrl - Kan
+* Left Alt - Pon
+* Space - Chi
+* Left Shift - Reach
+* Z - Ron
+* 1 - Start (joystick Start works too). 
+* Coins - stay on the joystick.
 
 ### Supported
 
@@ -63,20 +74,19 @@ from `ROM_START`.
 |-|-|-|
 | NEC V70 | Main CPU, 20 MHz | Vendored `s32_v60` with a 32-bit bus adapter; runs `tetrisp` on the board |
 | System controller | CRTC, interrupts, timer | Written |
-| Tilemaps, ROZ, sprites, mixer | Video | Written, pixel-exact against MAME on seven captures |
+| Tilemaps, ROZ, sprites, mixer | Video | Written, pixel-exact against MAME
 | Cartridge decryption chip | Tile ROM encryption | Decrypted in the download path |
-| Z80 | Sound CPU, 8 MHz | T80, with its RAM, banks and latches; its writes match MAME's over 12 s of `tetrisp` |
-| YMF271 | FM + PCM sound | The Seibu SPI core's, with its 4 MB sample ROM in SDRAM; over 30 s of `tetrisp` its output's spectrum correlates with MAME's at 0.93-1.00 per second, RMS within 2% |
+| Z80 | Sound CPU, 8 MHz | Vendored |
+| YMF271 | FM + PCM sound | Vendored Seibu SPI core. Spectrum correlates with MAME, RMS within 2% |
 
 ## History
 
-* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`)
-  * First release. V70, memory map, interrupts and video on the board; ROMs load through DDR3
-  * Sound: Z80 and YMF271. Good by ear in Desert War and Tetris Plus 2; cuts out in Gratia
-  * Tetris Plus playable; P-47 Aces, The Game Paradise, Hayaoshi Quiz Grand Champion Taikai, Tetris
-    Plus 2 and Idol Janshi Suchie-Pai II run their attract modes
-  * Mahjong keys from a keyboard; NVRAM saved to `config/nvram`; DIP menus; HDMI rotation and Flip 180
-  * `.mra` files for all 20 in-scope sets, loading from split or merged zips
+* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`) **Beta**
+  * First release
+  * Sound: Good in Desert War and Tetris Plus 2. Cuts out in Gratia
+  * Games appear playable
+  * Keyboard controls map to Mahjong keys
+  * NVRAM, DIP menus, HDMI rotation/flip 180
 
 ## Installation
 
@@ -84,30 +94,19 @@ from `ROM_START`.
 * Take the `*.mra` files from `releases/` and `releases/_alternatives/` and put them in `_Arcade`
 * Put the MAME ROMs in `games/mame`
 
-Development `.mra` files (capture playback) are in `releases/_dev/`.
-
-The mahjong sets take a PS/2 or USB keyboard with MAME's default keys: A-N for the tiles, Left Ctrl
-Kan, Left Alt Pon, Space Chi, Left Shift Reach, Z Ron, 1 Start (joystick Start works too). Coins
-stay on the joystick.
-
 ## Status
 
-The video path renders MAME captures pixel-exact on the board from the real ROMs. In simulation
-the whole board (V70, memory map, interrupts, video) runs `tetrisp` from reset to its title screen,
-pixel-exact against MAME at frame 1200. On the board `tetrisp` is playable, P-47 Aces and The Game
-Paradise and Tetris Plus 2 run their attract modes. Sound (Z80 and YMF271) is good by ear in Desert War and
-Tetris Plus 2 and cuts out in Gratia. Every in-scope set has a generated `.mra`,
-with DIP menus from MAME's input ports; HDMI rotation and Flip 180 are in the OSD. ROMs load through
-DDR3 (`address="0x30000000"`), and NVRAM is saved to `config/nvram` when the OSD opens. The games'
-own Flip Screen DIP does nothing: MAME's flips the tilemaps and not the sprites.
+Initial release. Much untested.
 
 ### Todo
 
-- [x] Z80
-- [x] YMF271
 - [ ] Gratia: sound cuts out
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
 - [x] Mahjong inputs
+- [ ] CRT Offset
+- [ ] Fast ROM loading
+- [ ] Hiscore
+- [ ] DIP Flipscreen
 
 ### Resource usage
 
@@ -173,9 +172,9 @@ where they matter.
   - the SDRAM controller (`sdram.sv`, vendored via
     [Arcade-Jackal_MiSTer](https://github.com/MiSTer-devel/Arcade-Jackal_MiSTer), with burst-4
     reads added)
-- **meathax** for the V60/V70 CPU core from the Sega System 32 core,
-  [meathax/s32](https://github.com/meathax/s32), and its verification suite.
-- The **MAMEdev team** — in particular **David Haywood**, **Paul Priest** and **Luca Elia** — for
+- **Meathax** for the V60/V70 CPU core from the Sega System 32 core,
+  [meathax/s32](https://github.com/meathax/s32), and its verification suite which are derived from MAME.
+- The **MAMEdev team** — in particular **Sylvian Glaize**, **Farfetch'd**, **David Haywood**, **Paul Priest** and **Luca Elia** — for
   [MAME](https://github.com/mamedev/mame)'s `jaleco/ms32.cpp`, `ms32_v.cpp`, `ms32_sprite.cpp`,
   `jaleco_ms32_sysctrl.cpp` and `jalcrpt.cpp`, and **Farfetch'd** and **R. Belmont** for its V60
   core, which is the behavioural contract of the CPU core here.
