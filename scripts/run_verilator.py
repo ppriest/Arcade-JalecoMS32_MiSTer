@@ -38,7 +38,8 @@ def main():
     env["PATH"] = os.pathsep.join([str(MSYS / "mingw64" / "bin"), str(MSYS / "usr" / "bin"), env["PATH"]])
     env["VERILATOR_ROOT"] = str(MSYS / "mingw64" / "share" / "verilator")
 
-    newest = max((REPO / s).stat().st_mtime for s in srcs)
+    # "+incdir+dir" lines are options, not sources
+    newest = max((REPO / s).stat().st_mtime for s in srcs if not s.startswith("+"))
     if rebuild or not exe.exists() or exe.stat().st_mtime < newest:
         obj.mkdir(parents=True, exist_ok=True)
         cmd = [str(MSYS / "mingw64" / "bin" / "verilator_bin.exe"),"--binary", "--timing", "-j", "4",   # -j caps the g++ fan-out (run_v60_verilator.sh)

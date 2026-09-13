@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-//  The Z80 side of the sound board (ms32_sound: T80, RAM, banks, latches,
-//  the YMF271's timers and status) running the set's own audiocpu ROM,
+//  The sound board (ms32_sound: T80, RAM, banks, latches and the YMF271)
+//  running the set's own audiocpu and ymf ROMs,
 //  driven by the V70's side of MAME's sound trace at MAME's times.
 //
 //      python scripts/mame_sound_trace.py tetrisp --frames 600
@@ -16,7 +16,9 @@
 //
 //  Time is clocks / (8 MHz x CEN_DIV). -gCEN_DIV=N (default 12, the core's
 //  96 MHz / 12) trades fidelity to the core's clocking for run time; the
-//  YMF271 tick follows it.
+//  YMF271 tick follows it. Under ModelSim (scripts/run_sim.sh defines
+//  MS32_SIM_NO_YMF271) the chip is sim/sound_tb/ms32_ymf271_timers.sv's
+//  timers-only stand-in; the chip itself is sim/ymf_tb's.
 //
 //  +GAME     set (default tetrisp)
 //  +MS       emulated milliseconds to run (default 4000)
@@ -39,20 +41,42 @@ real    HZ;
 // ------------------------------------------------------------- DUT
 reg         snd_reset = 0, cmd_we = 0;
 reg  [7:0]  cmd_data = 0;
-wire        to_main_we, rom_req, ymf_wr;
-wire [7:0]  to_main_data, ymf_wdata;
+wire        to_main_we, rom_req;
+wire [7:0]  to_main_data;
 wire [17:0] rom_addr;
 wire        rom_valid;
 wire [7:0]  rom_data;
-wire [3:0]  ymf_addr;
+wire        pcm_req;
+reg         pcm_ack = 0;
+wire [21:0] pcm_addr;
+reg  [63:0] pcm_data;
+wire signed [15:0] audio_l, audio_r;
 
-ms32_sound #(.CEN_DIV(CEN_DIV), .TICK_INC(441), .TICK_MOD(80000 * CEN_DIV)) dut (
+ms32_sound #(.CEN_DIV(CEN_DIV), .CLK_HZ_X3(29'(24000000 * CEN_DIV))) dut (
 	.clk(clk), .reset(reset),
 	.snd_reset(snd_reset), .cmd_we(cmd_we), .cmd_data(cmd_data),
 	.to_main_we(to_main_we), .to_main_data(to_main_data),
 	.rom_req(rom_req), .rom_addr(rom_addr), .rom_valid(rom_valid), .rom_data(rom_data),
-	.ymf_wr(ymf_wr), .ymf_addr(ymf_addr), .ymf_wdata(ymf_wdata)
+	.pcm_req(pcm_req), .pcm_addr(pcm_addr), .pcm_ack(pcm_ack), .pcm_data(pcm_data),
+	.audio_l(audio_l), .audio_r(audio_r)
 );
+
+// YMF271 sample memory: toggle handshake, LAT clocks
+reg [7:0] pcm [0:(1 << 22) - 1];
+integer   pcm_cnt = 0, pi;
+always @(posedge clk) begin
+	if (pcm_cnt == 0) begin
+		if (pcm_req != pcm_ack) pcm_cnt <= LAT;
+	end else if (pcm_cnt == 1) begin
+		for (pi = 0; pi < 8; pi = pi + 1) pcm_data[8*pi +: 8] <= pcm[(pcm_addr + pi) & 22'h3F_FFFF];
+		pcm_ack <= pcm_req; pcm_cnt <= 0;
+	end else pcm_cnt <= pcm_cnt - 1;
+end
+integer fa = 0;
+`ifndef MS32_SIM_NO_YMF271
+always @(posedge clk) if (fa != 0 && dut.u_ymf.sample_tick)
+	$fwrite(fa, "%c%c%c%c", audio_l[7:0], audio_l[15:8], audio_r[7:0], audio_r[15:8]);
+`endif
 
 // ------------------------------------------------------------- ROM model
 // The core's path: sdram_narrow_bridge (its one-granule cache answers a hit
@@ -149,6 +173,11 @@ initial begin
 	fi = $fopen({"roms/", GAME, "/audiocpu.bin"}, "rb");
 	if (fi == 0) begin $display("FATAL no roms/%s/audiocpu.bin", GAME); $finish; end
 	r = $fread(rom, fi); $fclose(fi);
+	fi = $fopen({"roms/", GAME, "/ymf.bin"}, "rb");
+	if (fi == 0) begin $display("FATAL no roms/%s/ymf.bin", GAME); $finish; end
+	r = $fread(pcm, fi); $fclose(fi);
+	fi = $fopen({"roms/", GAME, "/audiocpu.bin"}, "rb"); r = $fread(rom, fi); $fclose(fi);
+	fa = $fopen({OUTDIR, "/rtl_audio.raw"}, "wb");
 	fo = $fopen({OUTDIR, "/rtl_sound.trace"}, "w");
 	if (fo == 0) begin $display("FATAL cannot write %s (create it)", OUTDIR); $finish; end
 	$fdisplay(fo, "# t\tkind\t[addr]\tdata   (RTL, CEN_DIV %0d)", CEN_DIV);
@@ -178,6 +207,7 @@ initial begin
 	while (clocks < longint'(MS * HZ / 1000)) @(posedge clk);
 	flush_zr();
 	$fclose(fo);
+	$fclose(fa); fa = 0;
 	$display("SOUND: %0d ms, %0d opcode fetches, %0d bad ROM bytes, %0d zw, %0d zr, %0d to_main -> %s/rtl_sound.trace",
 	         MS, n_fetch, n_bad, n_zw, n_zr, n_tomain, OUTDIR);
 	$finish;

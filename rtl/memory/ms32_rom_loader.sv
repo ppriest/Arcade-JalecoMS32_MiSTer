@@ -18,7 +18,7 @@
 //
 // Granules come from ddram_phy (8 bytes, byte i at rdata[8*i +: 8]).
 module ms32_rom_loader #(
-	parameter logic [27:0] LENGTH = 28'h1BC_0000    // the end of ms32_sdram_top's map
+	parameter logic [27:0] LENGTH = 28'h1FC_0000    // the end of ms32_sdram_top's map
 ) (
 	input  logic         clk,
 	input  logic         reset,

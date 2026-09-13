@@ -12,7 +12,7 @@
 //  zero-width cast for a single-client port.
 //
 //  +STREAM  the stream file (default simout/<GAME>_stream.bin)
-//  +LEN     bytes to copy, hex (default the whole map, 1BC0000)
+//  +LEN     bytes to copy, hex (default the whole map, 1FC0000)
 `timescale 1ns/1ps
 
 module tb_romload;
@@ -68,7 +68,7 @@ ddram_phy u_phy (
 	.req(ddr_req), .we(1'b0), .addr(ddr_addr), .wdata(8'd0),
 	.busy(ddr_busy), .valid(ddr_valid), .rdata(ddr_rdata)
 );
-ms32_rom_loader #(.LENGTH(28'h1BC_0000)) u_ldr (
+ms32_rom_loader #(.LENGTH(28'h1FC_0000)) u_ldr (
 	.clk(clk), .reset(rst),
 	.start(start), .active(l_active),
 	.ddr_req(ddr_req), .ddr_addr(ddr_addr), .ddr_busy(ddr_busy), .ddr_valid(ddr_valid), .ddr_rdata(ddr_rdata),
@@ -93,6 +93,7 @@ ms32_sdram_top u_sdram (
 	.if_req(1'b0), .if_addr(18'd0), .if_valid(), .if_data(),
 	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
 	.z80_req(1'b0), .z80_addr(18'd0), .z80_valid(), .z80_data(),
+	.ymf_req(1'b0), .ymf_addr(22'd0), .ymf_ack(), .ymf_data(),
 	.dbg_dl_req(), .dbg_dl_busy()
 );
 sdram_chip_model_wide u_chip (
@@ -132,7 +133,7 @@ initial begin
 	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
 	if (!$value$plusargs("KEY=%d", KEY))   KEY = 1;
 	if (!$value$plusargs("STREAM=%s", STREAM)) STREAM = {"simout/", GAME, "_stream.bin"};
-	if (!$value$plusargs("LEN=%h", LEN))   LEN = 28'h1BC_0000;
+	if (!$value$plusargs("LEN=%h", LEN))   LEN = 28'h1FC_0000;
 	fd = $fopen(STREAM, "rb"); if (fd == 0) begin $display("FATAL no %s", STREAM); $finish; end
 	n = $fread(stream, fd); $fclose(fd);
 	$display("stream %0d bytes, copying %0d", n, LEN);
@@ -153,6 +154,8 @@ initial begin
 	check("bgtiles_dec",  26'h028_0000, 26'h040_0000, 26'h010_0000);
 	check("roztiles",     26'h068_0000, 26'h040_0000, 1);
 	check("sprite",       26'h0A8_0000, 26'h110_0000, 1);
+	check("audiocpu",     26'h1B8_0000, 26'h004_0000, 1);
+	check("ymf",          26'h1BC_0000, 26'h040_0000, 1);
 	$display("ROMLOAD: %0d bytes differ in total", total_bad);
 	$finish;
 end

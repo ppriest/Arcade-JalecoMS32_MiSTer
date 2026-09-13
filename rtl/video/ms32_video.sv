@@ -112,7 +112,12 @@ module ms32_video (
 		.line_start(line_start), .frame_odd(), .vblank_ev(vblank_ev), .field_ev(field_ev),
 		.flip(), .timer_enable(timer_enable), .hdisplay_o(hdisplay), .vdisplay_o(vdisplay)
 	);
-	wire fetch_active = (vcnt_next2 < vdisplay);
+	// Registered: vcnt changes at the end of a line and line_start comes at
+	// hdisplay, so the compare has the whole blanking interval to settle. As
+	// a wire it was the one path over clk_sys in the first build with the
+	// YMF271 (-0.178 ns, r_vdisplay into ms32_roz's state register).
+	logic fetch_active;
+	always_ff @(posedge clk) fetch_active <= (vcnt_next2 < vdisplay);
 
 	// ------------------------------------------------------------ tile RAMs
 	logic [12:0] tx_va, bg_va;

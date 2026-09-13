@@ -54,6 +54,9 @@
       <part repeat="0x100000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
       <part name="mp2_21.ver1.0.21" crc="2bcc4176"/>
+    <!-- ymf: 0x400000 bytes at 0x1bc0000, repeated 1x -->
+      <part name="mr96019-05.22" crc="74aa5c31"/>
+      <part repeat="0x200000">00</part>
   </rom>
   <nvram index="4" size="8192"/>
 </misterromdescription>

@@ -56,6 +56,9 @@
       <part repeat="0x100000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
       <part name="mr95025.21" crc="a6c70c7f"/>
+    <!-- ymf: 0x400000 bytes at 0x1bc0000, repeated 1x -->
+      <part name="mr95025.12" crc="1dd4f766"/>
+      <part name="mr95025.13" crc="0adfe5b8"/>
   </rom>
   <nvram index="4" size="8192"/>
 </misterromdescription>

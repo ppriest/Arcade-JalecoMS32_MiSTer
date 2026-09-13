@@ -785,18 +785,20 @@ Phase 0, Phase 1 and most of Phase 2 are done. On the DE10-nano: `tetrisp` is pl
 `gametngk`, `hayaosi2`, `tp2m32` and `suchie2` run their attract modes; the mahjong sets read a
 keyboard as their key matrix (A, B and N checked in `suchie2`'s service menu); ROMs load through DDR3 (`ms32_rom_loader`);
 NVRAM is saved to `config/nvram`; every in-scope set has a generated `.mra` with DIP menus, loading
-from split or merged zips; HDMI rotation and Flip 180 are in the OSD. Phase 3 has its CPU side: the
-Z80 (T80) with RAM, banks, latches and the YMF271's timers, whose writes match MAME's over 12 s of
-`tetrisp` in `sim/sound_tb` (the order of four timer A/B acknowledge pairs aside). What follows:
+from split or merged zips; HDMI rotation and Flip 180 are in the OSD. Phase 3 is in, released as
+`Arcade-JalecoMS32_20260913.rbf`: the Z80 (T80) with RAM, banks and latches, whose writes match
+MAME's over 12 s of `tetrisp` in `sim/sound_tb` (the order of four timer A/B acknowledge pairs
+aside), and the YMF271 with its sample ROM in SDRAM. What follows:
 
 1. **`tp2m32`'s remaining frame difference.** It runs its attract mode on the board (title, versus
    demo, score ranking) after two fixes: the interrupt acknowledges under `invert_lines`, and the V70
    core's `MOVD` qword operands. In simulation its frame-1200 tile, line, palette and priority RAMs
    equal MAME's; one animated sprite (256) is a step behind, and 1,030 pixels of the `2` logo's
    outline differ.
-2. **Phase 3: the YMF271 synthesis**, ported from the Seibu SPI core (see "The YMF271") once its
-   LICENSE is committed upstream (still absent when last checked), with its 4 MB sample ROM in
-   DDR3, and the audio output.
+2. **Gratia's sound cuts out** on the board (by ear). Desert War and Tetris Plus 2 sound good. The
+   YMF271 is the Seibu SPI core's (see "The YMF271"), on a half-rate clock enable; over 30 s of
+   `tetrisp` in `sim/ymf_tb` its spectrum correlates with MAME's at 0.93-1.00 per second, the low
+   seconds starting at key-on and key-off writes. RAM blocks are at 553 of 553.
 3. **The games' Flip Screen DIP** (sysctrl control bit 1). MAME flips the tilemaps and not the
    sprites, so its behaviour would draw a broken picture; decide what to follow and record it in
    `docs/MAME_DIVERGENCE.md` (Phase 4).

@@ -37,9 +37,8 @@ assign HDMI_FREEZE = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
-assign AUDIO_S = 0;
-assign AUDIO_L = 0;
-assign AUDIO_R = 0;
+// AUDIO_L/AUDIO_R come from the YMF271 (SOUND below)
+assign AUDIO_S = 1;
 assign AUDIO_MIX = 0;
 
 assign LED_DISK = 0;
@@ -268,7 +267,9 @@ ms32_capture_loader u_capload (
 
 ///////////////////////   SDRAM   /////////////////////////////////
 
-wire        z80_req, z80_valid;
+wire        z80_req, z80_valid, pcm_req, pcm_ack;
+wire [21:0] pcm_addr;
+wire [63:0] pcm_data;
 wire [17:0] z80_addr;
 wire  [7:0] z80_data;
 wire        prg_req, tx_req, bg_req, roz_req, spr_req;
@@ -336,6 +337,7 @@ ms32_sdram_top u_sdram (
 	.if_req(prg_req), .if_addr(prg_addr), .if_valid(prg_valid), .if_data(prg_data),
 	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
 	.z80_req(z80_req), .z80_addr(z80_addr), .z80_valid(z80_valid), .z80_data(z80_data),
+	.ymf_req(pcm_req), .ymf_addr(pcm_addr), .ymf_ack(pcm_ack), .ymf_data(pcm_data),
 	.dbg_dl_req(dbg_dl_req), .dbg_dl_busy(dbg_dl_busy)
 );
 
@@ -418,14 +420,18 @@ ms32_core u_core (
 
 ///////////////////////   SOUND   /////////////////////////////////
 
-// The Z80 side of the sound board; held in reset with the V70. The YMF271's
-// synthesis is not in yet (docs/ROADMAP.md, "The YMF271"), so AUDIO stays 0.
+// The sound board, held in reset with the V70: the Z80 and the YMF271, whose
+// sample ROM is the ymf region of ms32_sdram_top.
+wire signed [15:0] snd_l, snd_r;
+assign AUDIO_L = snd_l;
+assign AUDIO_R = snd_r;
 ms32_sound u_sound (
 	.clk(clk_sys), .reset(~core_run),
 	.snd_reset(snd_reset), .cmd_we(snd_cmd_we), .cmd_data(snd_cmd_data),
 	.to_main_we(snd_tomain_we), .to_main_data(snd_tomain_data),
 	.rom_req(z80_req), .rom_addr(z80_addr), .rom_valid(z80_valid), .rom_data(z80_data),
-	.ymf_wr(), .ymf_addr(), .ymf_wdata()
+	.pcm_req(pcm_req), .pcm_addr(pcm_addr), .pcm_ack(pcm_ack), .pcm_data(pcm_data),
+	.audio_l(snd_l), .audio_r(snd_r)
 );
 
 `ifdef DEBUG_ISSP

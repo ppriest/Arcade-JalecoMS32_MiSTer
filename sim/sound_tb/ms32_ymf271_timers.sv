@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
+// SIMULATION STAND-IN for rtl/sound/ymf271 in sim/sound_tb, selected by
+// MS32_SIM_NO_YMF271: ModelSim 10.5b rejects the vendored engine's uses of
+// signals before their declarations (Quartus and Verilator accept them), and
+// this bench is ModelSim's because of the T80. The chip itself is checked in
+// sim/ymf_tb under Verilator.
+//
 // The YMF271's bus face without its synthesis: the address latches, timers A
 // and B and the status register, so the Z80's driver runs as it does on the
 // board. The driver polls the timer flags for tempo (ms32.cpp: "IRQ is

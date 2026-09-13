@@ -52,13 +52,15 @@ rm -rf work
 # Quartus-only harness.
 # screen_rotate_two.sv (Sorgelig's, as vendored) uses its variables before declaring them, which
 # Quartus and Verilator accept and ModelSim's vlog rejects; no ModelSim bench instantiates it.
-RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' -not -name '*_upstream_reference.sv' -not -name 'screen_rotate_two.sv' | sort)
+# rtl/sound/ymf271 (the Seibu SPI core's YMF271) is excluded for the same reason: it uses signals
+# before declaring them. sim/ymf_tb checks it under Verilator; sim/sound_tb runs with a stand-in.
+RTL=$(find rtl -name '*.sv' -not -path 'rtl/synth_check/*' -not -path 'rtl/sound/ymf271/*' -not -name '*_upstream_reference.sv' -not -name 'screen_rotate_two.sv' | sort)
 echo "--- vlog ---"
 # INITREG defaults to the jotego-style zero-initialisation the sibling cores
 # use. Set INITREG=" " to run four-state (X) instead -- see the note in
 # sim/v70_boot_tb about why that matters for `always @*` blocks.
 # VDEFS: extra +define+ switches, e.g. VDEFS=+define+V60_NO_EXEC_RETIRE for an A/B.
-"$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION ${INITREG-+initreg=r+0 +initmem=r+0} ${VDEFS:-} \
+"$MS/vlog.exe" -quiet -sv -work work +define+SIMULATION +define+MS32_SIM_NO_YMF271 ${INITREG-+initreg=r+0 +initmem=r+0} ${VDEFS:-} \
     $RTL sim/common/*.sv sim/$TB/*.sv
 
 TOP=$(grep -l -E '^\s*module\s+tb_' sim/$TB/*.sv | head -1 | xargs grep -oE '^\s*module\s+tb_[a-z0-9_]+' | awk '{print $2}')

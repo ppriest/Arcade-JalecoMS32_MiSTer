@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Capture both sides of the sound interface from MAME, timestamped.
 
-    python scripts/mame_sound_trace.py tetrisp --frames 1200
-    -> debug/<set>-sound/<set>_sound.trace
+    python scripts/mame_sound_trace.py tetrisp --frames 1200 [--wav]
+    -> debug/<set>-sound/<set>_sound.trace  (and <set>_sound.wav, 44.1 kHz stereo)
 
 The V70's latch writes, result reads and sysctrl sound reset/ack, and every
 Z80 access to 0x3F00-0x3FFF (YMF271, latch, bank). The command lines drive
@@ -25,6 +25,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("game")
     ap.add_argument("--frames", type=int, default=1200)
+    ap.add_argument("--wav", action="store_true", help="also record MAME's audio (-wavwrite, 44100 Hz)")
     a = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -38,6 +39,7 @@ def main():
                MS32_SCRIPT=(repo / "scripts" / "mame" / "soundtrace.lua").as_posix())
     cmd = [str(MAME_EXE), a.game, "-skip_gameinfo", "-nodebug", "-nothrottle",
            "-sound", "none", "-video", "none", "-nowindow",
+           *(["-samplerate", "44100", "-wavwrite", (out / f"{a.game}_sound.wav").as_posix()] if a.wav else []),
            "-rompath", rompath(repo),
            "-seconds_to_run", str(a.frames // 50 + 30),
            "-autoboot_delay", "0",

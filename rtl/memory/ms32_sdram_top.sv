@@ -15,7 +15,7 @@
 //   roztiles  0x068_0000   4 MB     16x16x8 tiles
 //   sprite    0x0A8_0000   17 MB    256x256 pages, ROM_LOAD32_WORD x2 interleaved by the .mra
 //   audiocpu  0x1B8_0000   256 KB   Z80 program
-//   (ymf samples, 4 MB, are Phase 3: they fit after audiocpu, 0x1BC_0000..0x1FC_0000)
+//   ymf       0x1BC_0000   4 MB     YMF271 sample ROM (ends 0x1FC_0000)
 //
 // The sprite region is 17 MB for bbbxing, the one set whose sprite ROM is
 // larger than 16 MB. Every other set masks sprite addresses to 24 bits, which
@@ -25,7 +25,7 @@
 // PORTS -- sdram.sv's three ports are FIXED PRIORITY 0 > 1 > 2 on one chip:
 //   port 0   TX, BG and ROZ tile fetch (arbiter of 3): the hardest deadline, one line of lead
 //   port 1   sprite graphics: a frame of lead
-//   port 2   CPU instruction granules, CPU data words, Z80 bytes, and the download
+//   port 2   CPU instruction granules, CPU data words, Z80 bytes, YMF271 sample granules, and the download
 //
 // TILE DECRYPTION happens on the way in (ms32_jalcrpt_pkg.sv, generated and
 // checked by scripts/gen_jalcrpt.py): a source byte at region offset j is
@@ -78,6 +78,9 @@ module ms32_sdram_top (
 	input  wire         cpu_req, input wire [20:0] cpu_addr, output wire cpu_valid, output wire [31:0] cpu_data,
 	// Z80 program: bytes, region-local
 	input  wire         z80_req, input wire [17:0] z80_addr, output wire z80_valid, output wire  [7:0] z80_data,
+	// YMF271 sample ROM: 8-byte granules, region-local, on the chip's toggle
+	// handshake (ymf271_synth: req toggles, ack follows it when data is up)
+	input  wire         ymf_req, input wire [21:0] ymf_addr, output reg  ymf_ack,   output reg  [63:0] ymf_data,
 
 	// for the ISSP probe
 	output wire         dbg_dl_req,
@@ -92,7 +95,7 @@ module ms32_sdram_top (
 	localparam logic [25:0] BASE_ROZTILES = 26'h068_0000;
 	localparam logic [25:0] BASE_SPRITE   = 26'h0A8_0000;
 	localparam logic [25:0] BASE_AUDIOCPU = 26'h1B8_0000;
-	localparam logic [25:0] END_AUDIOCPU  = 26'h1BC_0000;
+	localparam logic [25:0] BASE_YMF      = 26'h1BC_0000;
 	localparam logic [23:0] MASK_TX  = 24'h07_FFFF;
 	localparam logic [23:0] MASK_BG  = 24'h3F_FFFF;
 	localparam logic [23:0] MASK_ROZ = 24'h3F_FFFF;
@@ -236,18 +239,32 @@ module ms32_sdram_top (
 		.req(z80_req), .addr({8'd0, z80_addr}), .valid(z80_valid), .data(z80_data),
 		.g_req(z80_g_req), .g_addr(z80_g_addr), .g_valid(z80_g_valid), .g_data(z80_g_data)
 	);
-	wire [2:0]  arb2_valid;
+	wire [3:0]  arb2_valid;
 	wire [63:0] arb2_rdata;
+
+	// the YMF271's toggle handshake onto the hold-until-valid contract
+	logic ymf_l;
+	wire  ymf_g_valid;
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			ymf_l <= 1'b0; ymf_ack <= ymf_req;
+		end else if (ymf_g_valid) begin
+			ymf_l <= 1'b0; ymf_data <= arb2_rdata; ymf_ack <= ymf_req;
+		end else if (ymf_req != ymf_ack) ymf_l <= 1'b1;
+	end
+
 	assign if_valid    = arb2_valid[0];  assign if_data    = arb2_rdata;
 	assign cpu_g_valid = arb2_valid[1];  assign cpu_g_data = arb2_rdata;
 	assign z80_g_valid = arb2_valid[2];  assign z80_g_data = arb2_rdata;
-	sdram_arbiter #(.N(3)) u_arb2 (
+	assign ymf_g_valid = arb2_valid[3];
+	sdram_arbiter #(.N(4)) u_arb2 (
 		.clk(clk), .reset(reset),
 		.phy_req(phy_req[2]), .phy_we(phy_we[2]), .phy_we16(phy_we16[2]),
 		.phy_addr(phy_addr[2]), .phy_wdata(phy_wdata[2]),
 		.phy_busy(phy_busy[2]), .phy_valid(phy_valid[2]), .phy_rdata(phy_rdata[2]),
-		.c_req({z80_g_req, cpu_g_req, if_l}),
-		.c_addr({BASE_AUDIOCPU + z80_g_addr,
+		.c_req({ymf_l, z80_g_req, cpu_g_req, if_l}),
+		.c_addr({BASE_YMF + {4'd0, ymf_addr[21:3], 3'b000},
+		         BASE_AUDIOCPU + z80_g_addr,
 		         BASE_MAINCPU  + cpu_g_addr,
 		         BASE_MAINCPU  + {5'd0, if_addr, 3'd0}}),
 		.c_valid(arb2_valid), .c_rdata(arb2_rdata),

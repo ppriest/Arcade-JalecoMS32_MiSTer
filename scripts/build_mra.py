@@ -10,8 +10,7 @@
 The map is ms32_sdram_top.sv's (this file repeats its bases and sizes and
 checks them against that file). Each region is filled by REPEATING its ROM
 data to the region size, so tile numbers past the ROM wrap the way MAME's
-`% elements` does; the CPU regions are exact. The ymf region is not sent
-until Phase 3. Interleaves follow ms32.cpp: ROM_LOAD32_BYTE x4 for the
+`% elements` does; the CPU regions are exact. Interleaves follow ms32.cpp: ROM_LOAD32_BYTE x4 for the
 program (map 0001/0010/0100/1000), ROM_LOAD32_WORD x2 for sprites
 (0021/2100). Rom index 1 is the mod byte: [1:0] the decryption key, bit 2
 ms32_invert_lines, bit 3 ROT270, bit 4 the 25-bit sprite mask (a sprite ROM over 16 MB),
@@ -45,7 +44,8 @@ NAMES["gametngk"] = "The Game Paradise - Master of Shooting! (ver 1.0)"
 INPUTS = {s: g["inputs"] for s, g in GAMES.items()}
 # region order in the SDRAM map, with the sizes ms32_sdram_top.sv reserves
 MAP = [("maincpu", 0x000_0000, 0x200000), ("txtiles", 0x020_0000, 0x080000), ("bgtiles", 0x028_0000, 0x400000),
-       ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1100000), ("audiocpu", 0x1B8_0000, 0x040000)]
+       ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1100000), ("audiocpu", 0x1B8_0000, 0x040000),
+       ("ymf", 0x1BC_0000, 0x400000)]
 
 
 def check_map():

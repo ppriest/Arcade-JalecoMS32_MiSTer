@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The MS32 sound board's CPU side, on clk_sys: the Z80 (T80se) with its RAM,
-// banked program ROM and the two latches, and the YMF271's bus face
-// (ms32_ymf271_timers) until the synthesis half is vendored.
+// The MS32 sound board on clk_sys: the Z80 (T80se) with its RAM, banked
+// program ROM and the two latches, and the YMF271 (rtl/sound/ymf271, the
+// Seibu SPI core's, PROVENANCE.md there) with its sample ROM in SDRAM.
 //
 // ms32.cpp (base_sound_map, ms32_snd_bank_w, latch_r, to_main_w):
 //   0000-3EFF  program ROM, fixed: audiocpu region 0x00000-0x03EFF
@@ -31,8 +31,7 @@
 // Bus timing, WAIT_n and the ROM handshake: as the Fuuki core's fg3_sound.sv.
 module ms32_sound #(
 	parameter int CEN_DIV    = 12,         // clk_sys 96 MHz / 12 = 8 MHz
-	parameter int TICK_INC   = 441,        // YMF271 sample rate from clk_sys
-	parameter int TICK_MOD   = 960_000,
+	parameter [28:0] CLK_HZ_X3 = 29'd144000000,   // the YMF271's clock enable rate x 3 (clk / 2)
 	parameter int RESET_HOLD = 1024
 ) (
 	input  logic        clk,
@@ -50,10 +49,15 @@ module ms32_sound #(
 	input  logic        rom_valid,
 	input  logic [7:0]  rom_data,
 
-	// the YMF271 bus, for the synthesis half: one clock per write
-	output logic        ymf_wr,
-	output logic [3:0]  ymf_addr,
-	output logic [7:0]  ymf_wdata
+	// YMF271 sample ROM, 4 MB: 8-byte granules on the chip's toggle handshake
+	output logic        pcm_req,
+	output logic [21:0] pcm_addr,
+	input  logic        pcm_ack,
+	input  logic [63:0] pcm_data,
+
+	// the chip's outputs 0 and 1 (ms32.cpp routes them left and right)
+	output logic signed [15:0] audio_l,
+	output logic signed [15:0] audio_r
 );
 
 	// ---------------------------------------------------------------- clock enable, reset
@@ -116,17 +120,21 @@ module ms32_sound #(
 	wire mem_wr = !mreq_n && !wr_n;
 	wire io_rd  = !iorq_n && !rd_n;
 
-	// A read's side effect at the start of its window; a write takes the
-	// address and data from the window's last clock, as the chip's /WR edge.
+	// A latch read's side effect at the start of its window; a YMF271 read's at
+	// the end, after the Z80 has taken the byte (the End flags clear on read).
+	// A write takes the address and data from the window's last clock, as the
+	// chip's /WR edge.
 	logic        mem_rd_d, mem_wr_d;
-	logic [15:0] wa;
+	logic [15:0] wa, ra;
 	logic [7:0]  wd;
 	always_ff @(posedge clk) begin
 		mem_rd_d <= mem_rd;
 		mem_wr_d <= mem_wr;
 		if (mem_wr) begin wa <= a; wd <= d_out; end
+		if (mem_rd) ra <= a;
 	end
 	wire rd_start = mem_rd && !mem_rd_d;
+	wire rd_end   = mem_rd_d && !mem_rd;
 	wire wr_end   = mem_wr_d && !mem_wr;
 
 	// ---------------------------------------------------------------- RAM, 16 KB
@@ -152,14 +160,57 @@ module ms32_sound #(
 	assign to_main_data = wd;
 
 	// ---------------------------------------------------------------- YMF271
-	logic [7:0] ymf_q;
-	assign ymf_wr    = wr_end && wa[15:4] == 12'h3F0;
-	assign ymf_addr  = wa[3:0];
-	assign ymf_wdata = wd;
-	ms32_ymf271_timers #(.TICK_INC(TICK_INC), .TICK_MOD(TICK_MOD)) u_ymf (
+	// No savestates here: every ssbus_if's select is off, so the engine's
+	// savestate sections are constant.
+	// The chip runs on a clock enable every other clock (MS32.sdc gives its
+	// internal paths two): the SeibuSPI engine was closed at 57 MHz. A write
+	// or read strobe is held until a clock with the enable.
+	logic [7:0]  ymf_q;
+	logic        ymf_ce, wr_pend, rd_pend;
+	wire         wr_now = wr_end && wa[15:4] == 12'h3F0;
+	wire         rd_now = rd_end && ra[15:4] == 12'h3F0;
+	always_ff @(posedge clk) begin
+		ymf_ce <= reset ? 1'b0 : ~ymf_ce;
+		if (reset) begin wr_pend <= 1'b0; rd_pend <= 1'b0; end
+		else begin
+			wr_pend <= (wr_now | wr_pend) & ~ymf_ce;
+			rd_pend <= (rd_now | rd_pend) & ~ymf_ce;
+		end
+	end
+	wire         ymf_wr = (wr_now | wr_pend) & ymf_ce;
+	wire         ymf_rd = (rd_now | rd_pend) & ymf_ce;
+	wire  [3:0]  ymf_a  = (wr_now | wr_pend) ? wa[3:0] : (rd_now | rd_pend) ? ra[3:0] : a[3:0];
+	logic [25:0] pcm_addr26;
+`ifdef MS32_SIM_NO_YMF271
+	// sim/sound_tb under ModelSim: timers and status only (see that file)
+	ms32_ymf271_timers #(.TICK_INC(441), .TICK_MOD(int'(CLK_HZ_X3) / 300)) u_ymf (
 		.clk(clk), .reset(reset),
 		.wr(ymf_wr), .wr_addr(wa[3:0]), .din(wd), .rd_addr(a[3:0]), .dout(ymf_q)
 	);
+	assign pcm_req = 1'b0; assign pcm_addr26 = 26'd0; assign audio_l = 16'd0; assign audio_r = 16'd0;
+`else
+	ssbus_if ss_regs(), ss_par(), ss_st(), ss_fb();
+	assign ss_regs.select = 8'hFF; assign ss_regs.query = 1'b0; assign ss_regs.read = 1'b0; assign ss_regs.write = 1'b0;
+	assign ss_regs.data   = 64'd0; assign ss_regs.addr  = 32'd0;
+	assign ss_par.select  = 8'hFF; assign ss_par.query  = 1'b0; assign ss_par.read  = 1'b0; assign ss_par.write  = 1'b0;
+	assign ss_par.data    = 64'd0; assign ss_par.addr   = 32'd0;
+	assign ss_st.select   = 8'hFF; assign ss_st.query   = 1'b0; assign ss_st.read   = 1'b0; assign ss_st.write   = 1'b0;
+	assign ss_st.data     = 64'd0; assign ss_st.addr    = 32'd0;
+	assign ss_fb.select   = 8'hFF; assign ss_fb.query   = 1'b0; assign ss_fb.read   = 1'b0; assign ss_fb.write   = 1'b0;
+	assign ss_fb.data     = 64'd0; assign ss_fb.addr    = 32'd0;
+	ymf271 #(.CLK_HZ_X3(CLK_HZ_X3)) u_ymf (
+		.clk(clk), .ce(ymf_ce), .reset(reset), .pause(1'b0),
+		.ssbus_regs(ss_regs), .ssbus_par(ss_par), .ssbus_st(ss_st), .ssbus_fb(ss_fb),
+		// stereo: outputs 0 and 1 left and right; pcm_25mb: the sample
+		// address reaches bit 21, for the 4 MB ROM
+		.stereo(1'b1), .pcm_25mb(1'b1), .ymf_16384(1'b0),
+		.addr(ymf_a), .din(wd), .dout(ymf_q), .wr(ymf_wr), .rd(ymf_rd), .irq(),
+		.sdr_addr(pcm_addr26), .sdr_dout(pcm_data), .sdr_req(pcm_req), .sdr_ack(pcm_ack),
+		.ext_wr(), .ext_wd(), .ext_a(), .ext_ovr(1'b0), .ext_ovr_data(8'h00), .mem_dirty(1'b0),
+		.audio_l(audio_l), .audio_r(audio_r), .dbg_overrun(), .dbg_active()
+	);
+`endif
+	assign pcm_addr = pcm_addr26[21:0];
 
 	// ---------------------------------------------------------------- read mux, WAIT_n, ROM
 	logic       rom_done, rom_pending;

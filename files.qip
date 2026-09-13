@@ -31,7 +31,10 @@ set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_ALU.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_Reg.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80se.vhd
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ms32_ymf271_timers.sv
+set_global_assignment -name SEARCH_PATH rtl/sound/ymf271
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ymf271/ymf271_ss.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ymf271/ymf271_synth.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ymf271/ymf271.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ms32_sound.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/ms32_capture_loader.sv

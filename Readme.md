@@ -23,21 +23,22 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 ## Games
 
 The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM module
-(`docs/ROADMAP.md`, "Game scope"). Tetris Plus is playable, without sound.
+(`docs/ROADMAP.md`, "Game scope"). Tetris Plus is playable; sound has been checked by ear in Desert War and
+Tetris Plus 2.
 
 ### Supported
 
 | Name | Year | Manufacturer | Key | Notes |
 |-|-|-|-|-|
-| Tetris Plus (ver 1.0) | 1995 | Jaleco / BPS | SS92046-01 | Playable, silent |
+| Tetris Plus (ver 1.0) | 1995 | Jaleco / BPS | SS92046-01 | Playable |
 | P-47 Aces (ver 1.1) | 1995 | Jaleco | SS92048-01 | Attract mode runs on the board |
 | The Game Paradise - Master of Shooting! (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Attract mode runs on the board |
 | Hayaoshi Quiz Grand Champion Taikai | 1994 | Jaleco | SS92046-01 | Attract mode runs on the board |
-| Tetris Plus 2 (ver 1.0, MegaSystem 32 Version) | 1997 | Jaleco | SS91022-10 | Swapped vblank/field interrupts. Attract mode runs on the board |
+| Tetris Plus 2 (ver 1.0, MegaSystem 32 Version) | 1997 | Jaleco | SS91022-10 | Swapped vblank/field interrupts. Attract mode runs on the board; sound good |
 | Hayaoshi Quiz Nettou Namahousou (ver 1.5) | 1994 | Jaleco | SS92046-01 | |
 | Best Bout Boxing (ver 1.3) | 1994 | Jaleco | SS92046-01 | 17 MB of sprites: mod byte selects a 25-bit sprite mask |
-| Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270 |
-| Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | |
+| Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Sound good |
+| Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | Sound cuts out |
 | World PK Soccer V2 (ver 1.1) | 1996 | Jaleco | SS92046-01 | Swapped vblank/field interrupts |
 | Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong keys from a keyboard. Attract mode and service menu run on the board |
 | Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
@@ -65,11 +66,17 @@ from `ROM_START`.
 | Tilemaps, ROZ, sprites, mixer | Video | Written, pixel-exact against MAME on seven captures |
 | Cartridge decryption chip | Tile ROM encryption | Decrypted in the download path |
 | Z80 | Sound CPU, 8 MHz | T80, with its RAM, banks and latches; its writes match MAME's over 12 s of `tetrisp` |
-| YMF271 | FM + PCM sound | Timers and status only (the driver polls them); no synthesis yet, so no audio |
+| YMF271 | FM + PCM sound | The Seibu SPI core's, with its 4 MB sample ROM in SDRAM; over 30 s of `tetrisp` its output's spectrum correlates with MAME's at 0.93-1.00 per second, RMS within 2% |
 
 ## History
 
-No release yet.
+* **`Arcade-JalecoMS32_20260913.rbf`** (commit `ceab497`)
+  * First release. V70, memory map, interrupts and video on the board; ROMs load through DDR3
+  * Sound: Z80 and YMF271. Good by ear in Desert War and Tetris Plus 2; cuts out in Gratia
+  * Tetris Plus playable; P-47 Aces, The Game Paradise, Hayaoshi Quiz Grand Champion Taikai, Tetris
+    Plus 2 and Idol Janshi Suchie-Pai II run their attract modes
+  * Mahjong keys from a keyboard; NVRAM saved to `config/nvram`; DIP menus; HDMI rotation and Flip 180
+  * `.mra` files for all 20 in-scope sets, loading from split or merged zips
 
 ## Installation
 
@@ -88,7 +95,8 @@ stay on the joystick.
 The video path renders MAME captures pixel-exact on the board from the real ROMs. In simulation
 the whole board (V70, memory map, interrupts, video) runs `tetrisp` from reset to its title screen,
 pixel-exact against MAME at frame 1200. On the board `tetrisp` is playable, P-47 Aces and The Game
-Paradise and Tetris Plus 2 run their attract modes; the sound CPU runs but there is no audio yet. Every in-scope set has a generated `.mra`,
+Paradise and Tetris Plus 2 run their attract modes. Sound (Z80 and YMF271) is good by ear in Desert War and
+Tetris Plus 2 and cuts out in Gratia. Every in-scope set has a generated `.mra`,
 with DIP menus from MAME's input ports; HDMI rotation and Flip 180 are in the OSD. ROMs load through
 DDR3 (`address="0x30000000"`), and NVRAM is saved to `config/nvram` when the OSD opens. The games'
 own Flip Screen DIP does nothing: MAME's flips the tilemaps and not the sprites.
@@ -96,20 +104,22 @@ own Flip Screen DIP does nothing: MAME's flips the tilemaps and not the sprites.
 ### Todo
 
 - [x] Z80
-- [ ] YMF271 synthesis (the Seibu SPI core's, once its licence is committed)
+- [x] YMF271
+- [ ] Gratia: sound cuts out
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
 - [x] Mahjong inputs
 
 ### Resource usage
 
-`MS32_stp` at commit `91f3146`, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
+`MS32` at commit `ceab497` (the 20260913 release), on the DE10-nano's Cyclone V 5CSEBA6, speed
+grade 7; clk_sys setup slack +0.129 ns:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 32,111 (77%) | 41,910 |
-| Block memory bits | 4,139,457 (73%) | 5,662,720 |
-| RAM blocks | 519 (94%) | 553 |
-| DSP blocks | 49 (44%) | 112 |
+| Logic (ALMs) | 35,202 (84%) | 41,910 |
+| Block memory bits | 4,309,048 (76%) | 5,662,720 |
+| RAM blocks | 553 (100%) | 553 |
+| DSP blocks | 58 (52%) | 112 |
 | PLLs | 3 | 6 |
 
 Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits, so a 32,768-word

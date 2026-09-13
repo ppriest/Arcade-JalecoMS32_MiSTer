@@ -61,6 +61,9 @@
       <part repeat="0x100000">00</part>
     <!-- audiocpu: 0x40000 bytes at 0x1b80000, repeated 1x -->
       <part name="mb94166_ver1.0-21.21" crc="38dcb837"/>
+    <!-- ymf: 0x400000 bytes at 0x1bc0000, repeated 1x -->
+      <part name="mr94041-13.22" crc="fba84caf"/>
+      <part name="mr94041-14.23" crc="2d6308bd"/>
   </rom>
   <nvram index="4" size="8192"/>
 </misterromdescription>

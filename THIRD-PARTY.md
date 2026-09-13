@@ -51,7 +51,7 @@ Obligations this project carries:
   changed here. That is this project's own convention rather than a licence term, and it is how the
   next person works out whether an upstream fix applies.
 
-### T80 � BSD-style (3-clause)
+### T80 — BSD-style (3-clause)
 
 <https://github.com/MiSTer-devel/T80> at `830fd03`, the Z80 core (Daniel Wallner, MikeJ and the
 MiSTer-devel maintainers), in `rtl/cpu/t80/`, copied unchanged from the Fuuki core. Each file's
@@ -70,6 +70,14 @@ or-later clause is the only reason the combination in this repository is lawful*
 Do not edit `sys/`. Framework updates overwrite it, and this project has no reason to diverge from
 upstream there. Build-time behaviour is changed through `VERILOG_MACRO` settings in the `.qsf`, which
 is a project decision rather than a modification of `sys/`.
+
+### Sorgelig's `sdram.sv` and `screen_rotate_two.sv`, and the sibling cores' shared files
+
+`rtl/memory/sdram/sdram.sv` (GPL-3.0-or-later) and `rtl/video/screen_rotate_two.sv` (GPL-2.0-or-later),
+both Sorgelig's, and the memory stack around them (`sdram_phy.sv`, `sdram_arbiter.sv`,
+`sdram_download.sv`, `sdram_narrow_bridge.sv`, `ddram_phy.sv`), came from Arcade-Seta_MiSTer, which
+took them from the Fuuki and Psikyo cores (GPL-3). Chain of custody in `rtl/memory/sdram/PROVENANCE.md`
+and each file's header.
 
 ### MAME — BSD-3-Clause
 
@@ -92,19 +100,22 @@ documents it. That applies to *function*. It does not extend to *structure*: whe
 decomposition choice that alternatives existed for, mirroring that choice is a different question
 from reproducing what the chip does.
 
-### zakk4223/Arcade-SeibuSPI_MiSTer — GPL-3 (confirmed by the author; LICENSE file pending)
+### zakk4223/Arcade-SeibuSPI_MiSTer — GPL-3 (by the author's statement; no LICENSE file upstream)
 
-<https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer> — `rtl/ymf271.sv`, `rtl/ymf271_synth.sv`,
-`rtl/ymf271_tables.vh`, the YMF271 (OPX) sound chip, a port of MAME's OPX rewrite. **Not yet
-vendored.** The repository carried no LICENSE and the files no header when found; the author
-confirmed GPL-3 on 2026-09-11 (relayed by this project's owner) and said a LICENSE would follow.
-Vendor only once that file is committed upstream, and record the commit in
-`rtl/sound/ymf271/PROVENANCE.md` when it happens.
+<https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer> at `fd25dd4` — `rtl/ymf271.sv`,
+`rtl/ymf271_synth.sv`, `rtl/ymf271_tables.vh`, the YMF271 (OPX) sound chip, a port of MAME's OPX
+rewrite, vendored into `rtl/sound/ymf271/` with §5(a) notices on the two modified files. The
+repository carries no LICENSE and the files no header. The author confirmed GPL-3 on 2026-09-11
+(relayed by this project's owner), and the project owner authorised vendoring on that basis
+before the LICENSE file landed. Record the upstream LICENSE commit in
+`rtl/sound/ymf271/PROVENANCE.md` when it exists.
+
+The same directory's `ymf271_ss.sv` carries the savestate bus interface `ssbus_if` from that
+commit's `rtl/savestates.sv`, which is Martin Donlon's from Arcade-IGSPGM_MiSTer, GPL v2 or later.
 
 ### ymfm — BSD-3-Clause
 
-<https://github.com/aaronsgiles/ymfm> — the YMF271 behaviour reference for the from-scratch sound
-chip. Same obligations as MAME's BSD-3 files. Not vendored; read, not copied.
+<https://github.com/aaronsgiles/ymfm> — a YMF271 behaviour reference. Same obligations as MAME's BSD-3 files. Not vendored; read, not copied.
 
 ## Not in this repository
 
