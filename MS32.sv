@@ -50,8 +50,21 @@ assign BUTTONS = 0;
 
 wire [1:0] ar = status[122:121];
 
-assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
-assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
+// ROTATION (HDMI, through screen_rotate_two). Auto follows the set's ROT from
+// the mod byte (bit 3: ROT270, desertwr and gametngk), which wants the picture
+// turned counter-clockwise to stand upright. The explicit settings are for a
+// monitor that is already turned. Flip 180 turns the OUTPUT round; it is not
+// the games' Flip Screen DIP (sysctrl control bit 1), which is not implemented.
+wire       game_vertical;
+wire [1:0] rot_sel    = status[64:63];
+wire       rotate_en  = (rot_sel == 2'd0) ? game_vertical : (rot_sel != 2'd1);
+wire       rotate_ccw = (rot_sel == 2'd0) ? game_vertical : (rot_sel == 2'd3);
+wire       flip_180   = status[65];
+
+// the physical screen is 4:3; turned to portrait it is 3:4
+assign VIDEO_ARX = (!ar) ? (rotate_en ? 12'd3 : 12'd4) : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? (rotate_en ? 12'd4 : 12'd3) : 12'd0;
+assign FB_FORCE_BLANK = 0;
 
 `include "build_id.v"
 
@@ -70,6 +83,8 @@ localparam CONF_STR = {
 	"MS32;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"O[64:63],Rotation,Auto,Off,CW,CCW;",
+	"O[65],Flip 180,Off,On;",
 	"-;",
 	"F2,BIN,Load capture;",
 	"-;",
@@ -155,10 +170,12 @@ wire reset = RESET | status[0] | buttons[1] | ~pll_locked | ioctl_download;
 
 // .mra rom index 1: [1:0] the tile decryption key (ms32_jalcrpt_pkg's
 // order: 0 ss91022_10, 1 ss92046_01, 2 ss92047_01, 3 ss92048_01);
-// bit 2 ms32_invert_lines (tp2m32, wpksocv2); bit 7 holds the V70 in reset
-// (capture playback .mra files).
+// bit 2 ms32_invert_lines (tp2m32, wpksocv2); bit 3 the set is ROT270;
+// bit 4 the 25-bit sprite address mask (bbbxing's 17 MB sprite ROM);
+// bit 7 holds the V70 in reset (capture playback .mra files).
 reg [7:0] mod_byte = 8'd0;
 always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd1) mod_byte <= ioctl_dout;
+assign game_vertical = mod_byte[3];
 
 ///////////////////////   INPUTS   ////////////////////////////////
 
@@ -214,7 +231,7 @@ ms32_sdram_top u_sdram (
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(),
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index), .ioctl_wr(ioctl_wr),
-	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(sd_wait), .key(mod_byte[1:0]),
+	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(sd_wait), .key(mod_byte[1:0]), .spr25(mod_byte[4]),
 	.tx_req(tx_req),   .tx_addr(tx_addr),   .tx_valid(tx_valid),   .tx_data(tx_data),
 	.bg_req(bg_req),   .bg_addr(bg_addr),   .bg_valid(bg_valid),   .bg_data(bg_data),
 	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
@@ -233,6 +250,12 @@ wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 
 assign DDRAM_CLK = clk_sys;
 
+// the core's side of the DDRAM port; ms32_ddram_mux shares it with the rotator
+wire        c_busy, c_rd, c_we, c_dout_ready;
+wire [7:0]  c_burstcnt, c_be;
+wire [28:0] c_addr;
+wire [63:0] c_din, c_dout;
+
 // The V70 runs once the download is over, unless the mod byte holds it for
 // capture playback; sys_reset leaves the bus side out of reset while a
 // capture loads (ms32_capture_loader).
@@ -245,8 +268,8 @@ ms32_core u_core (
 	.bg_req(bg_req),   .bg_addr(bg_addr),   .bg_valid(bg_valid),   .bg_data(bg_data),
 	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
 	.spr_req(spr_req), .spr_addr(spr_addr), .spr_valid(spr_valid), .spr_data(spr_data),
-	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
-	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.DDRAM_BUSY(c_busy), .DDRAM_BURSTCNT(c_burstcnt), .DDRAM_ADDR(c_addr), .DDRAM_DOUT(c_dout),
+	.DDRAM_DOUT_READY(c_dout_ready), .DDRAM_RD(c_rd), .DDRAM_DIN(c_din), .DDRAM_BE(c_be), .DDRAM_WE(c_we),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(),
 	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]),
@@ -276,8 +299,39 @@ assign VGA_R  = r;
 assign VGA_G  = g;
 assign VGA_B  = b;
 
-// An engine that could not keep up lights the LED: the sticky flags are
-// the first thing to read on a wrong picture (docs/phase1_video.md).
-assign LED_USER = tx_ovr | bg_ovr | roz_ovr | spr_ovr | fb_ovr | bad_pm;
+///////////////////////   HDMI ROTATION   /////////////////////////
+
+// A tap on the final output: the analog output keeps the native raster, a
+// rotated or flipped copy goes into DDR3 and the HPS framebuffer shows it.
+// Its writes share the DDRAM port with the core through ms32_ddram_mux,
+// which queues them (the rotator does not honour DDRAM_BUSY).
+wire        r_we, r_rd, rot_overflow;
+wire [7:0]  r_burstcnt, r_be;
+wire [28:0] r_addr;
+wire [63:0] r_din;
+screen_rotate_two screen_rotate_two (
+	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
+	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
+	.rotate_ccw(rotate_ccw), .no_rotate(~rotate_en), .flip(flip_180), .two_screen(1'b0), .video_rotated(),
+	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
+	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
+	.DDRAM_CLK(), .DDRAM_BUSY(1'b0), .DDRAM_BURSTCNT(r_burstcnt), .DDRAM_ADDR(r_addr), .DDRAM_DIN(r_din),
+	.DDRAM_BE(r_be), .DDRAM_WE(r_we), .DDRAM_RD(r_rd)
+);
+
+ms32_ddram_mux u_ddram_mux (
+	.clk(clk_sys), .reset(1'b0),
+	.c_busy(c_busy), .c_burstcnt(c_burstcnt), .c_addr(c_addr), .c_dout(c_dout), .c_dout_ready(c_dout_ready),
+	.c_rd(c_rd), .c_din(c_din), .c_be(c_be), .c_we(c_we),
+	.r_addr(r_addr), .r_din(r_din), .r_be(r_be), .r_we(r_we),
+	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.fifo_overflow(rot_overflow)
+);
+
+// An engine that could not keep up, or a lost rotated pixel, lights the LED:
+// the sticky flags are the first thing to read on a wrong picture
+// (docs/phase1_video.md).
+assign LED_USER = tx_ovr | bg_ovr | roz_ovr | spr_ovr | fb_ovr | bad_pm | rot_overflow;
 
 endmodule

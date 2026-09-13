@@ -13,9 +13,14 @@
 //   txtiles   0x020_0000   0.5 MB   8x8x8 tiles, DECRYPTED on the way in
 //   bgtiles   0x028_0000   4 MB     16x16x8 tiles, DECRYPTED on the way in
 //   roztiles  0x068_0000   4 MB     16x16x8 tiles
-//   sprite    0x0A8_0000   16 MB    256x256 pages, ROM_LOAD32_WORD x2 interleaved by the .mra
-//   audiocpu  0x1A8_0000   256 KB   Z80 program
-//   (ymf samples, 4 MB, are Phase 3: they fit after audiocpu, 0x1AC_0000..0x1EC_0000)
+//   sprite    0x0A8_0000   17 MB    256x256 pages, ROM_LOAD32_WORD x2 interleaved by the .mra
+//   audiocpu  0x1B8_0000   256 KB   Z80 program
+//   (ymf samples, 4 MB, are Phase 3: they fit after audiocpu, 0x1BC_0000..0x1FC_0000)
+//
+// The sprite region is 17 MB for bbbxing, the one set whose sprite ROM is
+// larger than 16 MB. Every other set masks sprite addresses to 24 bits, which
+// with the .mra's repeat is MAME's page wrap for any power-of-two ROM up to
+// 16 MB; spr25 (mod byte bit 4, bbbxing only) masks to 25 bits instead.
 //
 // PORTS -- sdram.sv's three ports are FIXED PRIORITY 0 > 1 > 2 on one chip:
 //   port 0   TX, BG and ROZ tile fetch (arbiter of 3): the hardest deadline, one line of lead
@@ -59,6 +64,7 @@ module ms32_sdram_top (
 	input  wire  [7:0]  ioctl_dout,
 	output wire         ioctl_wait,
 	input  wire  [1:0]  key,            // decryption key select (mod byte)
+	input  wire         spr25,          // 25-bit sprite address mask (mod byte bit 4)
 
 	// tile engines: region-local byte address of an 8-byte granule
 	input  wire         tx_req,  input wire [23:0] tx_addr,  output wire tx_valid,  output wire [63:0] tx_data,
@@ -85,12 +91,12 @@ module ms32_sdram_top (
 	localparam logic [25:0] BASE_BGTILES  = 26'h028_0000;
 	localparam logic [25:0] BASE_ROZTILES = 26'h068_0000;
 	localparam logic [25:0] BASE_SPRITE   = 26'h0A8_0000;
-	localparam logic [25:0] BASE_AUDIOCPU = 26'h1A8_0000;
-	localparam logic [25:0] END_AUDIOCPU  = 26'h1AC_0000;
+	localparam logic [25:0] BASE_AUDIOCPU = 26'h1B8_0000;
+	localparam logic [25:0] END_AUDIOCPU  = 26'h1BC_0000;
 	localparam logic [23:0] MASK_TX  = 24'h07_FFFF;
 	localparam logic [23:0] MASK_BG  = 24'h3F_FFFF;
 	localparam logic [23:0] MASK_ROZ = 24'h3F_FFFF;
-	localparam logic [27:0] MASK_SPR = 28'h0FF_FFFF;
+	wire       [24:0] mask_spr = spr25 ? 25'h1FF_FFFF : 25'h0FF_FFFF;
 
 	// ------------------------------------------------------------ download
 	// One registered stage computes where each byte goes and what it becomes.
@@ -211,7 +217,7 @@ module ms32_sdram_top (
 		.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
 		.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
 		.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
-		.c_req(spr_l), .c_addr(BASE_SPRITE + {2'd0, spr_addr[23:0] & MASK_SPR[23:0]}),
+		.c_req(spr_l), .c_addr(BASE_SPRITE + {1'd0, spr_addr[24:0] & mask_spr}),
 		.c_valid(spr_valid), .c_rdata(spr_data),
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);

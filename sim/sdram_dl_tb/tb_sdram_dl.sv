@@ -42,7 +42,7 @@ ms32_sdram_top u_sdram (
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(SDRAM_CLK),
 	.ioctl_download(ioctl_download), .ioctl_index(16'd0), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr),
-	.ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait), .key(KEY[1:0]),
+	.ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait), .key(KEY[1:0]), .spr25(1'b0),
 	.tx_req(1'b0), .tx_addr(24'd0), .tx_valid(), .tx_data(),
 	.bg_req(1'b0), .bg_addr(24'd0), .bg_valid(), .bg_data(),
 	.roz_req(1'b0), .roz_addr(24'd0), .roz_valid(), .roz_data(),

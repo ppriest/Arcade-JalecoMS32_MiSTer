@@ -30,13 +30,13 @@ The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM m
 | Name | Year | Manufacturer | Key | Notes |
 |-|-|-|-|-|
 | Tetris Plus (ver 1.0) | 1995 | Jaleco / BPS | SS92046-01 | Playable, silent |
-| P-47 Aces (ver 1.1) | 1995 | Jaleco | SS92048-01 | Capture frames render on the board |
-| The Game Paradise - Master of Shooting! (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Capture frames render on the board |
+| P-47 Aces (ver 1.1) | 1995 | Jaleco | SS92048-01 | Attract mode runs on the board |
+| The Game Paradise - Master of Shooting! (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Attract mode runs on the board |
 | Hayaoshi Quiz Grand Champion Taikai | 1994 | Jaleco | SS92046-01 | Phase 2 target |
 | Tetris Plus 2 (ver 1.0, MegaSystem 32 Version) | 1997 | Jaleco | SS91022-10 | Phase 2 target; swapped vblank/field interrupts |
 | Hayaoshi Quiz Nettou Namahousou (ver 1.5) | 1994 | Jaleco | SS92046-01 | |
-| Best Bout Boxing (ver 1.3) | 1994 | Jaleco | SS92046-01 | |
-| Desert War / Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270 |
+| Best Bout Boxing (ver 1.3) | 1994 | Jaleco | SS92046-01 | 17 MB of sprites: mod byte selects a 25-bit sprite mask |
+| Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270 |
 | Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | |
 | World PK Soccer V2 (ver 1.1) | 1996 | Jaleco | SS92046-01 | Swapped vblank/field interrupts |
 | Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong inputs |
@@ -44,7 +44,9 @@ The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM m
 | Ryuusei Janshi Kirara Star (ver 1.0) | 1996 | Jaleco | SS92047-01 | Mahjong inputs |
 | Vs. Janshi Brandnew Stars (Ver 1.1, MegaSystem 32 Version) | 1997 | Jaleco | SS92046-01 | Mahjong inputs |
 
-"Key" is the cartridge's decryption chip, which selects the tile ROM key.
+"Key" is the cartridge's decryption chip, which selects the tile ROM key. Clones have `.mra` files in
+`releases/_alternatives/`. The streams of the twelve sets whose zips were available were checked
+byte for byte against images built from `ROM_START`; the clones' were not.
 
 ### Out of scope for now
 
@@ -70,38 +72,45 @@ No release yet.
 
 ## Installation
 
-Not usable yet. Development `.mra` files are in `releases/_dev/`.
+* Take the latest `*.rbf` and put it in `_Arcade/cores`
+* Take the `*.mra` files from `releases/` and `releases/_alternatives/` and put them in `_Arcade`
+* Put the MAME ROMs in `games/mame`
+
+Development `.mra` files (capture playback) are in `releases/_dev/`.
 
 ## Status
 
 The video path renders MAME captures pixel-exact on the board from the real ROMs. In simulation
 the whole board (V70, memory map, interrupts, video) runs `tetrisp` from reset to its title screen,
-pixel-exact against MAME at frame 1200. On the board (MS32_stp at db73165) 	etrisp boots from its
-ROMs and is playable, without sound.
+pixel-exact against MAME at frame 1200. On the board `tetrisp` is playable, P-47 Aces and The Game
+Paradise run their attract modes; there is no sound. Every in-scope set has a generated `.mra`,
+with DIP menus from MAME's input ports; HDMI rotation and Flip 180 are in the OSD. The games' own
+Flip Screen DIP does nothing yet.
 
 ### Todo
 
 - [ ] `hayaosi2` and `tp2m32`
 - [ ] Fast DDR3 ROM load
 - [ ] Z80 and YMF271
-- [ ] Mahjong inputs, ROT270 sets, NVRAM saving
+- [ ] The games' Flip Screen DIP (sysctrl control bit 1)
+- [ ] Mahjong inputs, NVRAM saving
 
 ### Resource usage
 
-`MS32_stp` at commit `db73165`, with the CPU, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
+`MS32_stp` at commit `2d89d7e`, on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 31,595 (75%) | 41,910 |
-| Block memory bits | 4,126,913 (73%) | 5,662,720 |
-| RAM blocks | 517 (93%) | 553 |
-| DSP blocks | 48 (43%) | 112 |
+| Logic (ALMs) | 31,849 (76%) | 41,910 |
+| Block memory bits | 4,139,457 (73%) | 5,662,720 |
+| RAM blocks | 519 (94%) | 553 |
+| DSP blocks | 49 (44%) | 112 |
 | PLLs | 3 | 6 |
 
 Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits, so a 32,768-word
-RAM costs 32 blocks per 10 bits of width. The per-RAM figures are estimated from the same build's
+RAM costs 32 blocks per 10 bits of width. The per-RAM figures are estimated from commit `db73165`'s
 Analysis & Synthesis RAM Summary as the fewest M10K configurations (8192×1 … 256×40) that hold
-each RAM; they sum to 521 against the fitter's 517.
+each RAM; they sum to 521 against that build's fitter count of 517.
 
 | RAM | words × width | M10K |
 |---|---|---|

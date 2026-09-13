@@ -25,7 +25,7 @@ always #25 clk_cpu = ~clk_cpu;  // clk_cpu, 20 MHz
 reg base_reset = 1;
 
 string CAP, GAME, OUTDIR;
-integer LAT, OLD;
+integer LAT, OLD, ROT;
 
 // ------------------------------------------------------------- ioctl side
 reg         ioctl_download = 0, ioctl_wr = 0;
@@ -59,6 +59,12 @@ wire [27:0] sp_addr;
 reg         tx_valid = 0, bg_valid = 0, rz_valid = 0, sp_valid = 0;
 reg  [63:0] tx_data, bg_data, rz_data, sp_data;
 
+// the core's DDRAM side (c_*) and the port the model sees (DDRAM_*), with
+// ms32_ddram_mux and screen_rotate_two between them as in MS32.sv
+wire        c_busy, c_rd, c_we, c_dout_ready;
+wire [7:0]  c_burstcnt, c_be;
+wire [28:0] c_addr;
+wire [63:0] c_din, c_dout;
 wire        DDRAM_BUSY, DDRAM_RD, DDRAM_WE, DDRAM_DOUT_READY;
 wire [7:0]  DDRAM_BURSTCNT, DDRAM_BE;
 wire [28:0] DDRAM_ADDR;
@@ -78,14 +84,43 @@ ms32_core u_core (
 	.bg_req(bg_req),   .bg_addr(bg_addr),  .bg_valid(bg_valid),  .bg_data(bg_data),
 	.roz_req(rz_req),  .roz_addr(rz_addr), .roz_valid(rz_valid), .roz_data(rz_data),
 	.spr_req(sp_req),  .spr_addr(sp_addr), .spr_valid(sp_valid), .spr_data(sp_data),
-	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
-	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.DDRAM_BUSY(c_busy), .DDRAM_BURSTCNT(c_burstcnt), .DDRAM_ADDR(c_addr), .DDRAM_DOUT(c_dout),
+	.DDRAM_DOUT_READY(c_dout_ready), .DDRAM_RD(c_rd), .DDRAM_DIN(c_din), .DDRAM_BE(c_be), .DDRAM_WE(c_we),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(vblank_ev),
 	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.dbg_roz_fill(), .dbg_roz_hit(), .dbg_roz_pen_nz(), .dbg_pc()
 );
+
+// ------------------------------------------------------------ rotation (+ROT=1 cw, 2 ccw)
+wire        r_we, r_rd;
+wire [7:0]  r_burstcnt, r_be;
+wire [28:0] r_addr;
+wire [63:0] r_din;
+wire        fifo_overflow;
+screen_rotate_two u_rot (
+	.CLK_VIDEO(clk), .CE_PIXEL(ce_pix),
+	.VGA_R(r), .VGA_G(g), .VGA_B(b), .VGA_HS(hsync), .VGA_VS(vsync), .VGA_DE(~(hblank | vblank)),
+	.rotate_ccw(ROT == 2), .no_rotate(ROT == 0), .flip(1'b0), .two_screen(1'b0), .video_rotated(),
+	.FB_EN(), .FB_FORMAT(), .FB_WIDTH(), .FB_HEIGHT(), .FB_BASE(), .FB_STRIDE(), .FB_VBL(vsync), .FB_LL(1'b0),
+	.DDRAM_CLK(), .DDRAM_BUSY(1'b0), .DDRAM_BURSTCNT(r_burstcnt), .DDRAM_ADDR(r_addr), .DDRAM_DIN(r_din),
+	.DDRAM_BE(r_be), .DDRAM_WE(r_we), .DDRAM_RD(r_rd)
+);
+ms32_ddram_mux u_mux (
+	.clk(clk), .reset(1'b0),
+	.c_busy(c_busy), .c_burstcnt(c_burstcnt), .c_addr(c_addr), .c_dout(c_dout), .c_dout_ready(c_dout_ready),
+	.c_rd(c_rd), .c_din(c_din), .c_be(c_be), .c_we(c_we),
+	.r_addr(r_addr), .r_din(r_din), .r_be(r_be), .r_we(r_we),
+	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.fifo_overflow(fifo_overflow)
+);
+// the rotator's three buffers, 512 KB each, byte-addressed; everything outside
+// the core's 0x3xxxxxxx window lands here instead of in the model's words
+reg [7:0] rot_mem [0:3*(1 << 19) - 1];
+integer rot_writes = 0;
+wire is_rot = (DDRAM_ADDR[28:25] != 4'b0011);
 
 // ------------------------------------------------------------ ROM models
 // LAT clocks from req to valid, one request at a time per port (sim/video_tb's model).
@@ -136,7 +171,11 @@ always @(posedge clk) begin
 		end
 	end
 	if (!ddr_busy) begin
-		if (DDRAM_WE) begin
+		if (DDRAM_WE && is_rot) begin
+			for (j = 0; j < 8; j = j + 1) if (DDRAM_BE[j] && DDRAM_ADDR[21:20] < 2'd3 && DDRAM_ADDR[19:16] == 4'd0)
+				rot_mem[{DDRAM_ADDR[21:20], DDRAM_ADDR[15:0], 3'b000} + j] <= DDRAM_DIN[8*j +: 8];
+			rot_writes = rot_writes + 1;
+		end else if (DDRAM_WE) begin
 			if (ddr_wr_left == 0) begin ddr_wr_word = ddr_word; ddr_wr_left = {24'd0, DDRAM_BURSTCNT}; end
 			for (j = 0; j < 8; j = j + 1) if (DDRAM_BE[j]) ddr[ddr_wr_word][8*j +: 8] <= DDRAM_DIN[8*j +: 8];
 			ddr_wr_word = ddr_wr_word + 1;
@@ -179,6 +218,7 @@ initial begin
 	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
 	if (!$value$plusargs("LAT=%d", LAT))   LAT = 12;
 	if (!$value$plusargs("OLD=%d", OLD))   OLD = 0;
+	if (!$value$plusargs("ROT=%d", ROT))   ROT = 0;
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/", CAP};
 
 	fd = $fopen({"roms/", GAME, "/txtiles_dec.bin"}, "rb"); if (fd == 0) begin $display("FATAL no txtiles_dec.bin"); $finish; end
@@ -211,6 +251,12 @@ initial begin
 	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%06x\n", out[k]);
 	$fclose(fd);
 	$display("frame written to %s; overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d bad_primask=%0d", OUTDIR, tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm);
+	if (ROT != 0) begin
+		fd = $fopen({OUTDIR, "/rot_mem.bin"}, "wb");
+		for (k = 0; k < 3*(1 << 19); k = k + 1) $fwrite(fd, "%c", rot_mem[k]);
+		$fclose(fd);
+		$display("rotator: %0d writes, fifo_overflow=%0d, buffers written to %s/rot_mem.bin", rot_writes, fifo_overflow, OUTDIR);
+	end
 	$finish;
 end
 

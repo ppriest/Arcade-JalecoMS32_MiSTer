@@ -3,8 +3,8 @@
      rtl/memory/ms32_sdram_top.sv's map. Regions are filled by repeating the
      ROM data to the region size (MAME's tile-number wrap). -->
 <misterromdescription>
-  <name>P-47 Aces (ver 1.1)</name>
-  <setname>p47aces</setname>
+  <name>P-47 Aces (ver 1.0)</name>
+  <setname>p47acesa</setname>
   <year>1995</year>
   <manufacturer>Jaleco</manufacturer>
   <rbf>Arcade-JalecoMS32</rbf>
@@ -24,13 +24,13 @@
     <dip name="Language" bits="23" ids="English,Japanese"/>
   </switches>
   <rom index="1"><part>03</part></rom>   <!-- mod byte: key ss92048_01 -->
-  <rom index="0" zip="p47aces.zip" md5="none">
+  <rom index="0" zip="p47acesa.zip|p47aces.zip" md5="none">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
-        <part name="p-47_aces_3-31_rom_29_ver1.1.29" map="0001"/>
-        <part name="p-47_aces_3-31_rom_28_ver1.1.28" map="0010"/>
-        <part name="p-47_aces_3-31_rom_27_ver1.1.27" map="0100"/>
-        <part name="p-47_aces_3-31_rom_26_ver1.1.26" map="1000"/>
+        <part name="p47_ver1.0-29.29" map="0001"/>
+        <part name="p47_ver1.0-28.28" map="0010"/>
+        <part name="p47_ver1.0-27.27" map="0100"/>
+        <part name="p47_ver1.0-26.26" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
       <part name="p-47_ver1.0-30.30"/>

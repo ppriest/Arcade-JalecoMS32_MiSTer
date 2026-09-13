@@ -13,23 +13,39 @@ data to the region size, so tile numbers past the ROM wrap the way MAME's
 `% elements` does; the CPU regions are exact. The ymf region is not sent
 until Phase 3. Interleaves follow ms32.cpp: ROM_LOAD32_BYTE x4 for the
 program (map 0001/0010/0100/1000), ROM_LOAD32_WORD x2 for sprites
-(0021/2100). Rom index 1 is the mod byte: [1:0] the decryption key.
+(0021/2100). Rom index 1 is the mod byte: [1:0] the decryption key, bit 2
+ms32_invert_lines, bit 3 ROT270, bit 4 the 25-bit sprite mask (a sprite ROM over 16 MB),
+bit 7 holds the V70 (capture playback). The DIP switches are
+extracted from ms32.cpp's INPUT_PORTS by scripts/extract_dips.py (Seta's parser).
 """
 import re
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-from build_rom_image import SETS, SET_KEY  # noqa: E402
+from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES  # noqa: E402
+import extract_dips  # noqa: E402
+import extract_romstart  # noqa: E402
+
+# (set, region) -> bytes the ROM_LOADs actually fill; ROM_REGION can declare more (akiss's roztiles
+# is a 4 MB region holding one 2 MB ROM), and MAME's region is zero past the data
+_ROMS = extract_romstart.roms(extract_romstart.load())
+DATA_END = {(s, r): max(o + n * {"L": 1, "B": 4, "W": 2}[k] - (o & 3 if k != "L" else 0) for _, o, k, n in parts)
+            for s, regs in _ROMS.items() for r, _, parts in regs if parts}
 
 KEY_INDEX = {"ss91022_10": 0, "ss92046_01": 1, "ss92047_01": 2, "ss92048_01": 3}
 RBF = "Arcade-JalecoMS32"
-NAMES = {"tetrisp": "Tetris Plus (ver 1.0)", "p47aces": "P-47 Aces (ver 1.1)",
-         "gametngk": "The Game Paradise - Master of Shooting! (ver 1.0)"}
+# The .mra name is MAME's description with " / " as " - " (a file name cannot hold a
+# slash); gametngk's is shortened to the name its first .mra shipped under.
+NAMES = {s: g["name"].replace(" / ", " - ") for s, g in GAMES.items()}
+NAMES["gametngk"] = "The Game Paradise - Master of Shooting! (ver 1.0)"
+# the INPUT_PORTS block each set uses, from its GAME() line
+INPUTS = {s: g["inputs"] for s, g in GAMES.items()}
 # region order in the SDRAM map, with the sizes ms32_sdram_top.sv reserves
 MAP = [("maincpu", 0x000_0000, 0x200000), ("txtiles", 0x020_0000, 0x080000), ("bgtiles", 0x028_0000, 0x400000),
-       ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1000000), ("audiocpu", 0x1A8_0000, 0x040000)]
+       ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1100000), ("audiocpu", 0x1B8_0000, 0x040000)]
 
 
 def check_map():
@@ -68,34 +84,78 @@ def region_xml(region, size, parts):
     raise ValueError(f"{region}: mixed part kinds {kinds}")
 
 
+def esc(s):
+    return escape(str(s), {'"': "&quot;"})
+
+
+def switches_xml(game):
+    """<switches> for the DSW word at 0xFCC00010: MS32.sv takes index 254 as four
+    bytes, low first, so bit b of the word is dip bit b. A bit no switch covers
+    reads 1 (every DIP line is pulled up, all ports IP_ACTIVE_LOW)."""
+    blocks = extract_dips.load()
+    missing = set()
+    ports = extract_dips.parse_ports(blocks[INPUTS[game]], blocks, missing)
+    if missing:
+        sys.exit(f"{game}: DEF_STR missing from extract_dips: {sorted(missing)}")
+    default = 0xFFFFFFFF
+    dips = []
+    for name, mask, dflt, settings in sorted(ports["DSW"], key=lambda d: (d[1] & -d[1])):   # OSD in bit order
+        default = (default & ~mask) | (dflt & mask)
+        if settings is None:
+            continue
+        pos = [b for b in range(32) if mask & (1 << b)]
+        ids = []
+        for idx in range(1 << len(pos)):
+            value = sum(1 << bp for j, bp in enumerate(pos) if idx & (1 << j))
+            ids.append(settings.get(value, "-"))
+        if any("," in i for i in ids):
+            sys.exit(f"{game}: dip {name!r} has a comma in a label")
+        dips.append(f'    <dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>')
+    dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4))
+    return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
+
+
 def main():
     check_map()
     caps = [a for a in sys.argv[2:]] if len(sys.argv) > 2 and sys.argv[1] == "--with-capture" else []
-    out_dir = REPO / "releases" / ("_dev" if caps else "")
-    out_dir.mkdir(parents=True, exist_ok=True)
+
     for game, regions in SETS.items():
         cap = next((c for c in caps if c.split("-")[0] == game), None)
         if caps and not cap:
             continue
         by_name = {r: (size, parts) for r, size, parts in regions}
+        # parents at the top of releases/, clones of an MS32 parent under
+        # _alternatives/_<parent> (WORKFLOW §10); a parent in another driver
+        # (tp2m32, bnstars) leaves the set a parent here
+        parent = PARENT.get(game)
+        if cap:
+            out_dir = REPO / "releases" / "_dev"
+        elif parent in SETS:
+            out_dir = REPO / "releases" / "_alternatives" / f"_{NAMES[parent]}"
+        else:
+            out_dir = REPO / "releases"
+        out_dir.mkdir(parents=True, exist_ok=True)
         xml = [f"<!-- Generated by scripts/build_mra.py from build_rom_image.SETS; the layout is",
                f"     {'DEVELOPMENT: the ROMs plus a capture blob on rom index 2. ' if cap else ''}",
                f"     rtl/memory/ms32_sdram_top.sv's map. Regions are filled by repeating the",
                f"     ROM data to the region size (MAME's tile-number wrap). -->",
                "<misterromdescription>",
-               f"  <name>{NAMES.get(game, game)}</name>",
+               f"  <name>{esc(NAMES.get(game, game))}</name>",
                f"  <setname>{game}</setname>",
+               f"  <year>{GAMES[game]['year']}</year>",
+               f"  <manufacturer>{esc(GAMES[game]['maker'])}</manufacturer>",
                f"  <rbf>{RBF}</rbf>",
-               "  <mameversion>0286</mameversion>",
-               # DSW at 0xFCC00010, low byte first (MS32.sv sw[0..3]). MAME's defaults for
-               # all three sets: every switch off except Language (bit 23) = English, 0.
-               f'  <switches default="FF,FF,7F,FF"></switches>']
+               "  <mameversion>0286</mameversion>"]
+        xml += switches_xml(game)
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.
         key = KEY_INDEX[SET_KEY[game]]
-        mod = key | (0x80 if cap else 0)     # bit 7 holds the V70 for capture playback
+        spr_size = by_name["sprite"][0]
+        mod = (key | (0x04 if game in INVERT_LINES else 0) | (0x08 if game in ROT270 else 0)
+               | (0x10 if spr_size > 0x1000000 else 0) | (0x80 if cap else 0))
         xml.append(f'  <rom index="1"><part>{mod:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]}'
-                   f'{", CPU held" if cap else ""} -->')
-        xml.append(f'  <rom index="0" zip="{game}.zip" md5="none">')
+                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", CPU held" if cap else ""} -->')
+        zips = f"{game}.zip" + (f"|{PARENT[game]}.zip" if game in PARENT else "")
+        xml.append(f'  <rom index="0" zip="{zips}" md5="none">')
         pos = 0
         for region, base, rsize in MAP:
             if region not in by_name:
@@ -104,6 +164,9 @@ def main():
             if pos != base:
                 sys.exit(f"{game}: region {region} would start at {pos:#x}, map says {base:#x}")
             body = region_xml(region, size, parts)
+            short = size - DATA_END[(game, region)]
+            if short > 0:
+                body += f'      <part repeat="{short:#x}">00</part>\n'
             reps, rem = divmod(rsize, size)
             note = (f", then {rem:#x} bytes of zeros (a partial repeat cannot be expressed; "
                     f"tiles past the ROM read as pen 0 here where MAME wraps)") if rem else ""

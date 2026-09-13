@@ -26,9 +26,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mame_boot_trace import rompath  # noqa: E402
+import extract_romstart  # noqa: E402
 
 # (region, size, [(file, offset, kind)]) ; kind: B = LOAD32_BYTE, W = LOAD32_WORD, L = LOAD
-SETS = {
+# Typed by hand from ms32.cpp before scripts/extract_romstart.py existed; kept as that
+# extractor's check (--selftest). SETS below is the extractor's, for every set.
+HAND_SETS = {
     "tetrisp": [
         ("maincpu", 0x200000, [
             ("mb93166_ver1.0-26.26", 0x000003, "B"),
@@ -84,7 +87,52 @@ SETS = {
         ("audiocpu", 0x040000, [("mb94166_ver1.0-21.21", 0, "L")]),
         ("ymf",      0x400000, [("mr94041-13.22", 0, "L"), ("mr94041-14.23", 0x200000, "L")]),
     ],
+    "hayaosi2": [
+        ("maincpu", 0x200000, [
+            ("mb93138a.25", 0x000003, "B"),
+            ("mb93138a.27", 0x000002, "B"),
+            ("mb93138a.29", 0x000001, "B"),
+            ("mb93138a.31", 0x000000, "B"),
+        ]),
+        ("sprite", 0x900000, [
+            ("mr93038.04",  0x000000, "W"), ("mr93038.05",  0x000002, "W"),
+            ("mr93038.06",  0x400000, "W"), ("mr93038.07",  0x400002, "W"),
+            ("mb93138a.15", 0x800000, "W"), ("mb93138a.3",  0x800002, "W"),
+        ]),
+        ("roztiles", 0x200000, [("mr93038.03", 0, "L")]),
+        ("bgtiles",  0x100000, [("mr93038.08", 0, "L")]),
+        ("txtiles",  0x080000, [("mb93138a.32", 0, "L")]),
+        ("audiocpu", 0x040000, [("mb93138a.21", 0, "L")]),
+        ("ymf",      0x400000, [("mr92042.01", 0, "L"), ("mr93038.01", 0x200000, "L")]),
+    ],
+    "tp2m32": [
+        ("maincpu", 0x200000, [
+            ("mp2_26.ver1.0.26", 0x000003, "B"),
+            ("mp2_27.ver1.0.27", 0x000002, "B"),
+            ("mp2_28.ver1.0.28", 0x000001, "B"),
+            ("mp2_29.ver1.0.29", 0x000000, "B"),
+        ]),
+        ("sprite", 0x800000, [
+            ("mr96019-01.13", 0x000000, "W"), ("mr96019-02.1", 0x000002, "W"),
+        ]),
+        ("roztiles", 0x200000, [("mr96019-04.11", 0, "L")]),
+        ("bgtiles",  0x400000, [("mr96019-03.10", 0, "L")]),
+        ("txtiles",  0x080000, [("mp2_30.ver1.0.30", 0, "L")]),
+        ("audiocpu", 0x040000, [("mp2_21.ver1.0.21", 0, "L")]),
+        ("ymf",      0x400000, [("mr96019-05.22", 0, "L")]),
+    ],
 }
+
+# Every set, from the driver (scripts/extract_romstart.py). f1superb is out of scope: 56.75 MB.
+_DRIVER = extract_romstart.load()
+SETS = {k: v for k, v in extract_romstart.sets_table(_DRIVER).items() if k != "f1superb"}
+GAMES = extract_romstart.games(_DRIVER)
+# MAME parents whose zip a clone's files may be merged into
+PARENT = {k: g["parent"] for k, g in GAMES.items() if g["parent"] != "0"}
+# ms32_invert_lines: vblank and field swap levels
+INVERT_LINES = {k for k, g in GAMES.items() if g["machine"] == "ms32_invert_lines"}
+ROT270 = {k for k, g in GAMES.items() if g["rot"] == "ROT270"}
+SET_KEY = {k: g["init"].removeprefix("init_") for k, g in GAMES.items() if g["init"].startswith("init_ss")}
 
 
 # jalcrpt.cpp, transcribed: dest[i] = src[L(i ^ addr_xor)] ^ (i & 0xff) ^ data_xor,
@@ -104,12 +152,6 @@ KEYS = {
     "ss92047_01": (0x24000, 0x18, 0x24000, 0x55),
     "ss92048_01": (0x20400, 0xd6, 0x20400, 0xd4),
 }
-SET_KEY = {"tetrisp": "ss92046_01", "bbbxing": "ss92046_01", "hayaosi2": "ss92046_01",
-           "hayaosi3": "ss92046_01", "bnstars": "ss92046_01", "wpksocv2": "ss92046_01",
-           "desertwr": "ss91022_10", "gametngk": "ss91022_10", "tp2m32": "ss91022_10",
-           "gratiaa": "ss91022_10", "kirarasta": "ss91022_10",
-           "gratia": "ss92047_01", "kirarast": "ss92047_01", "akiss": "ss92047_01",
-           "p47aces": "ss92048_01", "suchie2": "ss92048_01", "akissa": "ss92048_01"}
 
 
 def decrypt(src, taps, addr_xor, data_xor, top_mask):
