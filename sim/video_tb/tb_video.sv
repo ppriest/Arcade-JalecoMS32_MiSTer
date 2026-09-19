@@ -34,7 +34,7 @@ wire [63:0] s_tx_data, s_bg_data, s_rz_data, s_sp_data;
 reg         vreg_we = 0;
 reg  [11:0] vreg_off;
 reg  [15:0] vreg_data;
-reg         txram_we = 0, bgram_we = 0, rozram_we = 0, lineram_we = 0, objram_we = 0, palram_we = 0, priram_we = 0;
+reg         txram_we = 0, bgram_we = 0, rozram_we = 0, lineram_we = 0, palram_we = 0, priram_we = 0;
 reg  [15:0] ram_addr;
 reg  [15:0] ram_wdata;
 
@@ -55,6 +55,17 @@ wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 wire [23:0] spr_cycles;
 wire [12:0] spr_drawn;
 
+// object RAM in SDRAM: the latency model, or ms32_sdram_top with +SDRAM=1;
+// the capture's copy is preloaded into whichever serves it
+wire        ob_rreq, ob_rvalid, ob_wreq, ob_we16, ob_wbusy, s_ob_rvalid, s_ob_wbusy;
+wire [12:0] ob_raddr;
+wire [15:0] ob_waddr, ob_wdata;
+wire [63:0] ob_rdata, s_ob_rdata;
+objram_sdram_model u_objsd (
+	.clk(clk), .rreq(ob_rreq && !SDRAM), .raddr(ob_raddr), .rvalid(ob_rvalid), .rdata(ob_rdata),
+	.wreq(ob_wreq && !SDRAM), .waddr(ob_waddr), .we16(ob_we16), .wdata(ob_wdata), .wbusy(ob_wbusy)
+);
+
 ms32_video u_video (
 	.clk(clk), .reset(reset),
 	.vreg_we(vreg_we), .vreg_off(vreg_off), .vreg_data(vreg_data),
@@ -63,7 +74,10 @@ ms32_video u_video (
 	.bgram_addr(ram_addr[12:0]),   .bgram_wel(bgram_we),     .bgram_weh(bgram_we),     .bgram_rdata(),
 	.rozram_addr(ram_addr[14:0]),  .rozram_wel(rozram_we),   .rozram_weh(rozram_we),   .rozram_rdata(),
 	.lineram_addr(ram_addr[10:0]), .lineram_wel(lineram_we), .lineram_weh(lineram_we), .lineram_rdata(),
-	.objram_addr(ram_addr[14:0]),  .objram_wel(objram_we),   .objram_weh(objram_we),   .objram_rdata(),
+	.obj_wq_valid(1'b0), .obj_wq_data(33'd0), .obj_wq_pop(), .obj_wq_level(6'd0),
+	.obj_cpu_req(1'b0), .obj_cpu_addr(15'd0), .obj_cpu_valid(), .obj_cpu_rdata(),
+	.obj_sd_rreq(ob_rreq), .obj_sd_raddr(ob_raddr), .obj_sd_rvalid(SDRAM ? s_ob_rvalid : ob_rvalid), .obj_sd_rdata(SDRAM ? s_ob_rdata : ob_rdata),
+	.obj_sd_wreq(ob_wreq), .obj_sd_waddr(ob_waddr), .obj_sd_we16(ob_we16), .obj_sd_wdata(ob_wdata), .obj_sd_wbusy(SDRAM ? s_ob_wbusy : ob_wbusy),
 	.palram_addr(ram_addr[15:0]),  .palram_wel(palram_we),   .palram_weh(palram_we),   .palram_rdata(),
 	.priram_addr(ram_addr[12:0]),  .priram_we(priram_we),                              .priram_rdata(),
 	.tx_rom_req(tx_req),  .tx_rom_addr(tx_addr),  .tx_rom_valid(SDRAM ? s_tx_valid : tx_valid),  .tx_rom_data(SDRAM ? s_tx_data : tx_data),
@@ -102,15 +116,17 @@ ms32_sdram_top u_sdram (
 	.roz_req(sd_rz_req), .roz_addr(rz_addr), .roz_valid(s_rz_valid), .roz_data(s_rz_data),
 	.spr_req(sd_sp_req), .spr_addr(sp_addr), .spr_valid(s_sp_valid), .spr_data(s_sp_data),
 	.if_req(1'b0), .if_addr(18'd0), .if_valid(), .if_data(),
-	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
 	.z80_req(1'b0), .z80_addr(18'd0), .z80_valid(), .z80_data(),
-	.ymf_req(1'b0), .ymf_addr(22'd0), .ymf_ack(), .ymf_data()
+	.ymf_req(1'b0), .ymf_addr(22'd0), .ymf_ack(), .ymf_data(),
+	.obj_rreq(ob_rreq && SDRAM), .obj_raddr(ob_raddr), .obj_rvalid(s_ob_rvalid), .obj_rdata(s_ob_rdata),
+	.obj_wreq(ob_wreq && SDRAM), .obj_waddr(ob_waddr), .obj_we16(ob_we16), .obj_wdata(ob_wdata), .obj_wbusy(s_ob_wbusy),
+	.dbg_dl_req(), .dbg_dl_busy()
 );
 sdram_chip_model_wide u_chip (
 	.clk(clk), .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA),
 	.SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS)
 );
-localparam int W_MAINCPU = 26'h000_0000 / 2, W_TX = 26'h020_0000 / 2, W_BG = 26'h028_0000 / 2, W_ROZ = 26'h068_0000 / 2, W_SPR = 26'h0A8_0000 / 2;
+localparam int W_MAINCPU = 26'h000_0000 / 2, W_TX = 26'h020_0000 / 2, W_BG = 26'h028_0000 / 2, W_ROZ = 26'h068_0000 / 2, W_SPR = 26'h0A8_0000 / 2, W_OBJ = 26'h1FC_0000 / 2;
 
 // ------------------------------------------------------------ ROM models
 integer tx_cnt = 0, bg_cnt = 0, rz_cnt = 0, sp_cnt = 0, i;
@@ -193,17 +209,17 @@ end
 reg [7:0] tmp [0:262143];
 integer n, k, fd;
 
-task write_ram(input integer which, input integer count);   // 0 tx 1 bg 2 roz 3 line 4 obj 5 pal 6 pri
+task write_ram(input integer which, input integer count);   // 0 tx 1 bg 2 roz 3 line 5 pal 6 pri (object RAM is preloaded)
 	begin
 		for (k = 0; k < count; k = k + 1) begin
 			@(posedge clk);
 			ram_addr  <= k;
 			ram_wdata <= {tmp[4*k+1], tmp[4*k]};
 			txram_we <= (which == 0); bgram_we <= (which == 1); rozram_we <= (which == 2); lineram_we <= (which == 3);
-			objram_we <= (which == 4); palram_we <= (which == 5); priram_we <= (which == 6);
+			palram_we <= (which == 5); priram_we <= (which == 6);
 		end
 		@(posedge clk);
-		txram_we <= 0; bgram_we <= 0; rozram_we <= 0; lineram_we <= 0; objram_we <= 0; palram_we <= 0; priram_we <= 0;
+		txram_we <= 0; bgram_we <= 0; rozram_we <= 0; lineram_we <= 0; palram_we <= 0; priram_we <= 0;
 	end
 endtask
 
@@ -272,7 +288,9 @@ initial begin
 	fd = $fopen({"debug/", CAP, "/", GAME, "_lineram.bin"}, "rb"); n = $fread(tmp, fd); $fclose(fd); write_ram(3, 2048);
 	fd = $fopen({"debug/", CAP, "/", GAME, "_sprram_vbl.bin"}, "rb");
 	if (!fd) fd = $fopen({"debug/", CAP, "/", GAME, "_sprram.bin"}, "rb");
-	n = $fread(tmp, fd); $fclose(fd); write_ram(4, 32768);
+	n = $fread(tmp, fd); $fclose(fd);
+	for (k = 0; k < 65536; k = k + 1) u_objsd.mem[k] = tmp[4*(k/2) + k%2];
+	if (SDRAM) for (k = 0; k < 32768; k = k + 1) u_chip.mem[W_OBJ + k] = {tmp[4*k+1], tmp[4*k]};
 	fd = $fopen({"debug/", CAP, "/", GAME, "_palram.bin"}, "rb");  n = $fread(tmp, fd); $fclose(fd); write_ram(5, 65536);
 	fd = $fopen({"debug/", CAP, "/", GAME, "_priram.bin"}, "rb");  n = $fread(tmp, fd); $fclose(fd); write_ram(6, 8192);
 	fd = $fopen({"debug/", CAP, "/", GAME, "_txscroll.bin"}, "rb"); n = $fread(tmp, fd); $fclose(fd); write_regs(12'hA00, 6);

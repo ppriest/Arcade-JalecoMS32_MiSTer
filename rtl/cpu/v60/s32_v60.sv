@@ -18,6 +18,10 @@
 //    2026-09-12  fetch_is_rom (which addresses the FAST_IFETCH port may
 //                serve) is a parameter pair IF_ROM{0,1}_{MASK,MATCH}; the
 //                defaults are upstream's two 24-bit ranges unchanged.
+//    2026-09-13  Charles MacDonald's hardware notes (ms32.cpp header): PIR
+//                reads 0x00007007 on a uPD70632GD-20 (was MAME's 0x7000),
+//                and MOV.D's register-pair source for R31 is R31:R31, not
+//                R31 and the register after it.
 //    2026-09-13  MAME's dim 3 (qword) operands: MOVD's register source in
 //                the F2 D=0 short form is the register PAIR (op1 an lvalue,
 //                as XCH), and autoincrement, autodecrement and index
@@ -1066,6 +1070,8 @@ wire        ea_qword = (cls == C_F12) &&
                         (ea_target2 && (cur_op == 8'h86 || cur_op == 8'h96 ||
                                         cur_op == 8'ha6 || cur_op == 8'hb6)));
 wire [1:0]  ea_sh    = ea_qword ? 2'd3  : ea_dim;
+// [MS32] MOV.D register-pair source: rn, rn+1, except R31, whose pair is R31:R31
+wire [4:0]  movd_hi_reg = (op1[4:0] == 5'd31) ? 5'd31 : op1[4:0] + 5'd1;
 wire [31:0] ea_step  = ea_qword ? 32'd8 : dim_step(ea_dim);
 
 // ---------------------------------------------------------------------------
@@ -1128,7 +1134,7 @@ else if (ce) begin
         sbr  <= 32'h0000_0000;
         sycw <= 32'h0000_0070;
         tkcw <= 32'h0000_e000;
-        pir  <= IS_V70 ? 32'h0000_7000 : 32'h0000_6000;
+        pir  <= IS_V70 ? 32'h0000_7007 : 32'h0000_6000;   // [MS32] V70: 0x7007, measured (MacDonald)
         psw2 <= 32'h0000_f002;
         isp <= 0; l0sp <= 0; l1sp <= 0; l2sp <= 0; l3sp <= 0;
         trr <= 0;
@@ -4243,11 +4249,13 @@ task automatic exec_op;
         // number, flagN=0 -> memory address of the low word.
         if (flag1) begin
             // register-pair source: capture the pair, then dispatch the write
+            // [MS32] the pair's second register is R31 again for R31 (MacDonald:
+            // "mov.d r31, [r0] ; Write pair R31:R31 to [R0]")
             movd_lo <= r[op1[4:0]];
-            movd_hi <= r[op1[4:0] + 5'd1];
+            movd_hi <= r[movd_hi_reg];
             if (flag2) begin
                 queue_reg_write(op2[4:0],          r[op1[4:0]],          32'hffffffff);
-                queue_reg_write(op2[4:0] + 5'd1,   r[op1[4:0] + 5'd1],   32'hffffffff);
+                queue_reg_write(op2[4:0] + 5'd1,   r[movd_hi_reg],       32'hffffffff);
                 st <= S_NEXT;
             end
             else st <= S_MOVD_WL;   // register -> memory qword

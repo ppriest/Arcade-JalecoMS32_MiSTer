@@ -79,6 +79,13 @@ both Sorgelig's, and the memory stack around them (`sdram_phy.sv`, `sdram_arbite
 took them from the Fuuki and Psikyo cores (GPL-3). Chain of custody in `rtl/memory/sdram/PROVENANCE.md`
 and each file's header.
 
+### rmonic79's `crt_adjust.sv` — GPL-3.0-or-later
+
+`rtl/video/crt_adjust.sv`, the CRT adjust line buffer (H-Size, H-Position, V-Shift), by Umberto
+Parisi (rmonic79) from [Arcade-Raiden_MiSTer](https://github.com/rmonic79/Arcade-Raiden_MiSTer),
+copied unchanged from the Seta core, which carries one local fix (its header says which).
+`rtl/video/ms32_crt.sv` is this core's wrapper.
+
 ### MAME — BSD-3-Clause
 
 <https://github.com/mamedev/mame> — the behavioural oracle throughout. `jaleco/ms32.cpp`,

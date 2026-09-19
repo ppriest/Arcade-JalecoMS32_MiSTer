@@ -77,8 +77,18 @@ wire [7:0]  r, g, b;
 wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 
 // the V70 stays in reset: capture playback
+// object RAM in SDRAM (ms32_objram behind ms32_sdram_top)
+wire        ob_rreq, ob_rvalid, ob_wreq, ob_we16, ob_wbusy;
+wire [12:0] ob_raddr;
+wire [15:0] ob_waddr, ob_wdata;
+wire [63:0] ob_rdata;
+objram_sdram_model u_objsd (
+	.clk(clk), .rreq(ob_rreq), .raddr(ob_raddr), .rvalid(ob_rvalid), .rdata(ob_rdata),
+	.wreq(ob_wreq), .waddr(ob_waddr), .we16(ob_we16), .wdata(ob_wdata), .wbusy(ob_wbusy)
+);
+
 ms32_core u_core (
-	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(OLD != 0 ? reset : sys_reset), .cpu_run(1'b0), .invert_lines(1'b0),
+	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(OLD != 0 ? reset : sys_reset), .cpu_run(1'b0), .pause(1'b0), .invert_lines(1'b0),
 	.inputs(32'hFFFF_FFFF), .dsw(32'hFFFF_FFFF), .mahjong(1'b0), .mj_keys({30{1'b1}}),
 	.nv_addr(nv_addr), .nv_rdata(nv_rdata), .nv_written(),
 	.snd_reset(), .snd_cmd_we(), .snd_cmd_data(), .snd_tomain_we(1'b0), .snd_tomain_data(8'h00),
@@ -88,6 +98,8 @@ ms32_core u_core (
 	.bg_req(bg_req),   .bg_addr(bg_addr),  .bg_valid(bg_valid),  .bg_data(bg_data),
 	.roz_req(rz_req),  .roz_addr(rz_addr), .roz_valid(rz_valid), .roz_data(rz_data),
 	.spr_req(sp_req),  .spr_addr(sp_addr), .spr_valid(sp_valid), .spr_data(sp_data),
+	.obj_rreq(ob_rreq), .obj_raddr(ob_raddr), .obj_rvalid(ob_rvalid), .obj_rdata(ob_rdata),
+	.obj_wreq(ob_wreq), .obj_waddr(ob_waddr), .obj_we16(ob_we16), .obj_wdata(ob_wdata), .obj_wbusy(ob_wbusy),
 	.DDRAM_BUSY(c_busy), .DDRAM_BURSTCNT(c_burstcnt), .DDRAM_ADDR(c_addr), .DDRAM_DOUT(c_dout),
 	.DDRAM_DOUT_READY(c_dout_ready), .DDRAM_RD(c_rd), .DDRAM_DIN(c_din), .DDRAM_BE(c_be), .DDRAM_WE(c_we),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),

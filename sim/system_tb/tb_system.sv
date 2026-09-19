@@ -29,9 +29,9 @@ always #25 clk_cpu = ~clk_cpu;  // clk_cpu, 20 MHz
 reg reset = 1, cpu_run = 0;
 
 string  GAME, OUTDIR;
-integer LAT, FRAME, TRACE;
+integer LAT, FRAME, TRACE, PAUSE_AT, PAUSE_LEN;
 reg [31:0] DSW;
-reg        INV = 0, MJ = 0;
+reg        INV = 0, MJ = 0, PAUSE = 0;
 
 // ------------------------------------------------------------- ROMs
 reg [7:0]  prgrom [0:(1 << 21) - 1];
@@ -58,8 +58,18 @@ wire [7:0]  r, g, b;
 wire        tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm;
 wire [31:0] pc;
 
+// object RAM in SDRAM (ms32_objram behind ms32_sdram_top)
+wire        ob_rreq, ob_rvalid, ob_wreq, ob_we16, ob_wbusy;
+wire [12:0] ob_raddr;
+wire [15:0] ob_waddr, ob_wdata;
+wire [63:0] ob_rdata;
+objram_sdram_model u_objsd (
+	.clk(clk), .rreq(ob_rreq), .raddr(ob_raddr), .rvalid(ob_rvalid), .rdata(ob_rdata),
+	.wreq(ob_wreq), .waddr(ob_waddr), .we16(ob_we16), .wdata(ob_wdata), .wbusy(ob_wbusy)
+);
+
 ms32_core u_core (
-	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(reset), .cpu_run(cpu_run), .invert_lines(INV),
+	.clk_sys(clk), .clk_cpu(clk_cpu), .sys_reset(reset), .cpu_run(cpu_run), .pause(PAUSE), .invert_lines(INV),
 	.inputs(32'hFFFF_FFFF), .dsw(DSW), .mahjong(MJ), .mj_keys({30{1'b1}}),
 	.nv_addr(13'd0), .nv_rdata(), .nv_written(),
 	.snd_reset(), .snd_cmd_we(), .snd_cmd_data(), .snd_tomain_we(1'b0), .snd_tomain_data(8'h00),
@@ -69,6 +79,8 @@ ms32_core u_core (
 	.bg_req(bg_req),   .bg_addr(bg_addr),  .bg_valid(bg_valid),  .bg_data(bg_data),
 	.roz_req(rz_req),  .roz_addr(rz_addr), .roz_valid(rz_valid), .roz_data(rz_data),
 	.spr_req(sp_req),  .spr_addr(sp_addr), .spr_valid(sp_valid), .spr_data(sp_data),
+	.obj_rreq(ob_rreq), .obj_raddr(ob_raddr), .obj_rvalid(ob_rvalid), .obj_rdata(ob_rdata),
+	.obj_wreq(ob_wreq), .obj_waddr(ob_waddr), .obj_we16(ob_we16), .obj_wdata(ob_wdata), .obj_wbusy(ob_wbusy),
 	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
@@ -192,7 +204,7 @@ task dump16(input string name, input integer aw);
 			if (name == "txram")      v = u_core.u_video.u_txram.mem[w];
 			else if (name == "bgram") v = u_core.u_video.u_bgram.mem[w];
 			else if (name == "rozram") v = u_core.u_video.u_rozram.mem[w];
-			else if (name == "sprram") v = u_core.u_video.u_objram.u_live.mem[w];
+			else if (name == "sprram") v = {u_objsd.mem[2*w+1], u_objsd.mem[2*w]};   // the live RAM, in the SDRAM model
 			else if (name == "palram") v = w[0] ? u_core.u_video.u_pal1.mem[w >> 1] : u_core.u_video.u_pal0.mem[w >> 1];
 			else if (name == "priram") v = {8'h00, u_core.u_video.u_priram.mem[w]};
 			else                      v = u_core.u_video.u_lineram.mem[w];
@@ -201,6 +213,141 @@ task dump16(input string name, input integer aw);
 		$fclose(fdd);
 	end
 endtask
+
+// +PAUSE_AT=<frame> +PAUSE_LEN=<frames>: hold the pause input for that many
+// frames and report the V70's bus accesses across the held part (one frame
+// after the edge onwards, which must not move)
+integer acc0;
+initial begin
+	if ($value$plusargs("PAUSE_AT=%d", PAUSE_AT) && PAUSE_AT > 0) begin
+		wait (frame == PAUSE_AT);
+		PAUSE = 1;
+		wait (frame == PAUSE_AT + 1);
+		acc0 = u_core.u_sys.dbg_accesses;
+		wait (frame == PAUSE_AT + PAUSE_LEN);
+		$display("pause: frames %0d-%0d, accesses %0d at +1 frame, %0d at release, pc %08x",
+		         PAUSE_AT, PAUSE_AT + PAUSE_LEN, acc0, u_core.u_sys.dbg_accesses, pc);
+		PAUSE = 0;
+	end
+end
+
+// V70 accesses by region: per run, and the heaviest frame
+integer n_wram_r = 0, n_wram_w = 0, n_obj_r = 0, n_obj_w = 0, n_rom = 0, n_all = 0;
+integer f_wram = 0, f_obj = 0, f_all = 0, mx_wram = 0, mx_obj = 0, mx_all = 0, f_last = 0;
+always @(posedge clk_cpu) begin
+	if (u_core.u_sys.accept && !u_core.u_sys.ld_owns) begin
+		n_all = n_all + 1; f_all = f_all + 1;
+		if (u_core.u_sys.is_wram)   begin if (u_core.u_sys.m_we) n_wram_w = n_wram_w + 1; else n_wram_r = n_wram_r + 1; f_wram = f_wram + 1; end
+		if (u_core.u_sys.is_objram) begin if (u_core.u_sys.m_we) n_obj_w = n_obj_w + 1;   else n_obj_r = n_obj_r + 1;   f_obj = f_obj + 1; end
+		if (u_core.u_sys.is_rom) n_rom = n_rom + 1;
+	end
+	if (frame != f_last) begin
+		f_last = frame;
+		if (frame > 2) begin
+			if (f_wram > mx_wram) mx_wram = f_wram;
+			if (f_obj  > mx_obj)  mx_obj  = f_obj;
+			if (f_all  > mx_all)  mx_all  = f_all;
+		end
+		f_wram = 0; f_obj = 0; f_all = 0;
+	end
+end
+
+// +PCHIST: after frame 60, count bus accesses by V70 PC and write the top
+// entries at the end (finds a game's wait-for-vblank loop).
+// +IDLE_LO=hex +IDLE_HI=hex: per frame, write the clocks the PC spends outside
+// that range (busy) and the work/object RAM accesses made while busy to
+// <OUT>/busy.txt: "frame busy_clk wram_acc obj_acc".
+int unsigned pc_hist [int unsigned];
+reg [31:0] IDLE_LO = 0, IDLE_HI = 0;
+integer fbusy = 0, b_clk = 0, b_wram = 0, b_obj = 0, b_last = 0;
+wire in_idle = (u_core.u_sys.dbg_pc >= IDLE_LO) && (u_core.u_sys.dbg_pc <= IDLE_HI);
+always @(posedge clk_cpu) begin
+	if ($test$plusargs("PCHIST") && frame > 60 && u_core.u_sys.accept && !u_core.u_sys.ld_owns)
+		pc_hist[u_core.u_sys.dbg_pc] = pc_hist.exists(u_core.u_sys.dbg_pc) ? pc_hist[u_core.u_sys.dbg_pc] + 1 : 1;
+	if (fbusy != 0) begin
+		if (!in_idle && cpu_run) begin
+			b_clk = b_clk + 1;
+			if (u_core.u_sys.accept && u_core.u_sys.is_wram)   b_wram = b_wram + 1;
+			if (u_core.u_sys.accept && u_core.u_sys.is_objram) b_obj  = b_obj + 1;
+		end
+		if (frame != b_last) begin
+			$fdisplay(fbusy, "%0d %0d %0d %0d", b_last, b_clk, b_wram, b_obj);
+			b_last = frame; b_clk = 0; b_wram = 0; b_obj = 0;
+		end
+	end
+end
+
+// +PCT_LO=hex +PCT_HI=hex +PCT_AT=frame: print the first 60 bus accesses made
+// with the PC in that range from that frame on
+reg [31:0] PCT_LO = 0, PCT_HI = 0;
+integer PCT_AT = 0, pct_n = 0;
+always @(posedge clk_cpu)
+	if (PCT_HI != 0 && frame >= PCT_AT && pct_n < 60 && u_core.u_sys.accept &&
+	    u_core.u_sys.dbg_pc >= PCT_LO && u_core.u_sys.dbg_pc <= PCT_HI) begin
+		pct_n = pct_n + 1;
+		$display("pct f%0d pc %08x %s %08x be %x wdata %08x", frame, u_core.u_sys.dbg_pc, u_core.u_sys.m_we ? "W" : "R",
+		         u_core.u_sys.a, u_core.u_sys.m_be, u_core.u_sys.m_wdata);
+	end
+
+// the vblank copy of object RAM (SDRAM to DDR3): the longest, in clk_sys clocks
+integer cp_len = 0, cp_max = 0;
+always @(posedge clk) begin
+	if (u_core.u_video.u_objram.copying) cp_len = cp_len + 1;
+	else begin if (cp_len > cp_max) cp_max = cp_len; cp_len = 0; end
+end
+
+// +FRAMELOG: <OUT>/frames.txt, one line per sprite frame the engine finishes:
+// "frame drawn cycles obj_writes obj_writes_during_copy cpu_objram_clocks".
+// The object RAM columns count clk_sys events since the previous line.
+integer flog = 0, fl_w = 0, fl_wc = 0, fl_wait = 0, fl_cpstart = 0, fl_vbl = 0;
+always @(posedge clk) begin   // clocks from vblank start to the sprite engine's start
+	if (vblank_ev) fl_vbl = 0; else fl_vbl = fl_vbl + 1;
+	if (u_core.u_video.u_objram.copy_done) fl_cpstart = fl_vbl;
+end
+always @(posedge clk) if (flog != 0) begin
+	if (u_core.u_video.u_objram.wq_pop) begin
+		fl_w = fl_w + 1;
+		if (u_core.u_video.u_objram.copy_act) fl_wc = fl_wc + 1;
+	end
+	// the V70's bus held on object RAM: queue full, a read's drain or its request
+	if (u_core.u_sys.bst inside {u_core.u_sys.B_OBJW, u_core.u_sys.B_OBJR, u_core.u_sys.B_OBJ}) fl_wait = fl_wait + 1;
+	if (u_core.u_video.spr_done) begin
+		$fdisplay(flog, "%0d %0d %0d %0d %0d %0d %0d %0d", frame, u_core.u_video.u_spr.sprites_drawn, u_core.u_video.u_spr.frame_cycles, fl_w, fl_wc, fl_wait,
+		          u_core.u_video.u_spr.frame_overrun, fl_cpstart);
+		fl_w = 0; fl_wc = 0; fl_wait = 0;
+	end
+end
+
+// +RESET_AT=<frame>: the OSD reset, as MS32.sv applies it: the core's reset
+// (sys_reset) and cpu_run low together for 100,000 clocks, then released
+integer RESET_AT = 0;
+initial begin
+	if ($value$plusargs("RESET_AT=%d", RESET_AT) && RESET_AT > 0) begin
+		wait (frame == RESET_AT);
+		@(posedge clk); reset = 1; cpu_run = 0;
+		repeat (100000) @(posedge clk);
+		reset = 0;
+		repeat (40) @(posedge clk);
+		cpu_run = 1;
+		$display("reset at frame %0d released; pc %08x", RESET_AT, pc);
+	end
+end
+
+// line RAM: CPU writes during active display, and writes to the address the
+// ROZ engine's port B holds within +-2 clk_sys of its read edge (the M10K's
+// mixed-port read-during-write is undefined)
+integer lr_w_act = 0, lr_w_vbl = 0, lr_coll = 0, lr_last_w = -100, lr_frames_coll = 0, lr_fc_last = -1;
+reg [10:0] lr_w_addr;
+integer tcl = 0;
+always @(posedge clk) tcl = tcl + 1;
+always @(posedge clk_cpu) if (u_core.u_sys.lineram_wel || u_core.u_sys.lineram_weh) begin
+	lr_w_addr = u_core.u_sys.lineram_addr; lr_last_w = tcl;
+	if (u_core.u_video.vcnt < 224) lr_w_act = lr_w_act + 1; else lr_w_vbl = lr_w_vbl + 1;
+end
+always @(posedge clk) if (tcl - lr_last_w <= 2 && u_core.u_video.roz_la == lr_w_addr && u_core.u_video.u_roz.state == 1) begin
+	lr_coll = lr_coll + 1;
+	if (frame != lr_fc_last) begin lr_frames_coll = lr_frames_coll + 1; lr_fc_last = frame; end
+end
 
 // ------------------------------------------------------------- run
 integer n, k, fd;
@@ -213,6 +360,8 @@ initial begin
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/system-", GAME};
 	INV = $test$plusargs("INV");
 	MJ  = $test$plusargs("MJ");
+	if (!$value$plusargs("PAUSE_AT=%d", PAUSE_AT))   PAUSE_AT = 0;
+	if (!$value$plusargs("PAUSE_LEN=%d", PAUSE_LEN)) PAUSE_LEN = 0;
 
 	for (k = 0; k < (1 << 21); k = k + 1) prgrom[k] = 8'hCD;
 	fd = $fopen({"roms/", GAME, "/maincpu.bin"}, "rb"); if (fd == 0) begin $display("FATAL no maincpu.bin"); $finish; end
@@ -232,6 +381,11 @@ initial begin
 		$fdisplay(ftr, "# seq\trw\taddr\tmask\tdata");
 	end
 
+	void'($value$plusargs("IDLE_LO=%h", IDLE_LO));
+	void'($value$plusargs("PCT_LO=%h", PCT_LO)); void'($value$plusargs("PCT_HI=%h", PCT_HI)); void'($value$plusargs("PCT_AT=%d", PCT_AT));
+	void'($value$plusargs("IDLE_HI=%h", IDLE_HI));
+	if (IDLE_HI != 0) fbusy = $fopen({OUTDIR, "/busy.txt"}, "w");
+	if ($test$plusargs("FRAMELOG")) flog = $fopen({OUTDIR, "/frames.txt"}, "w");
 	repeat (40) @(posedge clk);
 	reset = 0;
 	repeat (40) @(posedge clk);
@@ -244,6 +398,23 @@ initial begin
 	$fclose(fd);
 	$display("frame %0d written to %s; pc %08x, %0d accesses, %0d interrupts; overrun tx=%0d bg=%0d roz=%0d spr=%0d fb=%0d bad_primask=%0d",
 	         FRAME, OUTDIR, pc, u_core.u_sys.dbg_accesses, irqs, tx_ovr, bg_ovr, roz_ovr, spr_ovr, fb_ovr, bad_pm);
+	if ($test$plusargs("PCHIST")) begin : top_pcs
+		int unsigned best_pc, best_n, done_pc [$];
+		for (int t = 0; t < 12; t++) begin
+			best_n = 0;
+			foreach (pc_hist[q]) if (pc_hist[q] > best_n && !(q inside {done_pc})) begin best_n = pc_hist[q]; best_pc = q; end
+			done_pc.push_back(best_pc);
+			$display("pc %08x %0d", best_pc, best_n);
+		end
+	end
+	if (fbusy != 0) $fclose(fbusy);
+	if (flog != 0) $fclose(flog);
+	$display("line RAM: CPU writes %0d in active display, %0d in vblank; same-address writes within 2 clocks of a ROZ read: %0d in %0d frames",
+	         lr_w_act, lr_w_vbl, lr_coll, lr_frames_coll);
+	$display("DIP reads: %0d, not the switch register: %0d (last %08x)", u_core.u_sys.dbg_dsw_reads, u_core.u_sys.dbg_dsw_bad, u_core.u_sys.dbg_dsw_last_bad);
+	$display("object RAM copy: longest %0d clocks (%0d lines of 6144)", cp_max, cp_max / 6144);
+	$display("accesses: all %0d (heaviest frame %0d), work RAM r %0d w %0d (heaviest frame %0d), object RAM r %0d w %0d (heaviest frame %0d), ROM data %0d",
+	         n_all, mx_all, n_wram_r, n_wram_w, mx_wram, n_obj_r, n_obj_w, mx_obj, n_rom);
 	if (ftr != 0) $fclose(ftr);
 	if ($test$plusargs("DUMP")) begin
 		dump16("txram", 13); dump16("bgram", 13); dump16("rozram", 15); dump16("lineram", 11);

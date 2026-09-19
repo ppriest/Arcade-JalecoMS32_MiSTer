@@ -14,12 +14,18 @@
 //  +GAME   set (default tetrisp)
 //  +MS     emulated milliseconds (default 10000)
 //  +LAT    sample memory latency in clocks (default 16)
+//
+//  OWN=1 (sim/ymf_own_tb): the chip on its own clock, CHIP_PS picoseconds a
+//  period, enabled every clock; LAT then counts its clocks.
 //  +DUMP0=ms +DUMP1=ms  per-slot envelope state and phase at every sample tick
 //          in that window, to <OUT>/rtl_slots.txt (the format of the
 //          temporary MAME dump used to compare against)
 `timescale 1ns/1ps
 
-module tb_ymf;
+module tb_ymf #(
+	parameter bit      OWN     = 1'b0,
+	parameter int      CHIP_PS = 17708        // 56.47 MHz: 960 MHz / 17
+);
 
 localparam real HZ = 96.0e6;
 reg clk = 0;
@@ -52,11 +58,17 @@ assign ss_st.data   = 64'd0;   assign ss_st.addr   = 32'd0;
 assign ss_fb.select   = 8'hFF; assign ss_fb.query   = 1'b0; assign ss_fb.read   = 1'b0; assign ss_fb.write   = 1'b0;
 assign ss_fb.data   = 64'd0;   assign ss_fb.addr   = 32'd0;
 
-// as ms32_sound drives it: a clock enable every other clock, 48 MHz
-reg ce = 0;
-always @(posedge clk) ce <= reset ? 1'b0 : ~ce;
-ymf271 #(.CLK_HZ_X3(29'd144000000)) u_ymf (
-	.clk(clk), .ce(ce), .reset(reset), .pause(1'b0),
+// as ms32_sound drives it: a clock enable every other clock, 48 MHz; or OWN
+reg yclk = 0;
+always #(CHIP_PS / 2000.0) yclk = ~yclk;
+wire ck = OWN ? yclk : clk;
+reg ce_half = 0;
+always @(posedge clk) ce_half <= reset ? 1'b0 : ~ce_half;
+wire ce = OWN ? 1'b1 : ce_half;
+localparam longint CE_HZ   = OWN ? longint'(1.0e12 / CHIP_PS) : 64'd48000000;
+localparam int     HZ_X3   = int'(3 * CE_HZ);
+ymf271 #(.CLK_HZ_X3(29'(HZ_X3))) u_ymf (
+	.clk(ck), .ce(ce), .reset(reset), .pause(1'b0),
 	.ssbus_regs(ss_regs), .ssbus_par(ss_par), .ssbus_st(ss_st), .ssbus_fb(ss_fb),
 	.stereo(1'b1), .pcm_25mb(1'b1), .ymf_16384(1'b0),
 	.addr(addr), .din(din), .dout(dout), .wr(wr), .rd(1'b0), .irq(),
@@ -69,7 +81,7 @@ ymf271 #(.CLK_HZ_X3(29'd144000000)) u_ymf (
 reg [7:0] pcm [0:(1 << 22) - 1];
 integer   cnt = 0, i;
 reg       req_d = 0;
-always @(posedge clk) begin
+always @(posedge ck) begin
 	req_d <= sdr_req;
 	if (cnt == 0) begin
 		if (sdr_req != sdr_ack && sdr_req != req_d) cnt <= LAT;
@@ -82,16 +94,25 @@ end
 
 // ------------------------------------------------------------- audio out
 integer fa, n_samp = 0, max_over = 0;
-always @(posedge clk) if (ce && u_ymf.sample_tick && fa != 0) begin
+always @(posedge ck) if (ce && u_ymf.sample_tick && fa != 0) begin
 	$fwrite(fa, "%c%c%c%c", audio_l[7:0], audio_l[15:8], audio_r[7:0], audio_r[15:8]);
 	n_samp = n_samp + 1;
 	if (dbg_overrun > max_over) max_over = dbg_overrun;
 end
 
+// sample fetches: per tick, and the most in one tick
+integer f_tick = 0, f_max = 0, f_total = 0;
+reg     req_q = 0;
+always @(posedge ck) begin
+	req_q <= sdr_req;
+	if (sdr_req != req_q) begin f_tick = f_tick + 1; f_total = f_total + 1; end
+	if (ce && u_ymf.sample_tick) begin if (f_tick > f_max) f_max = f_tick; f_tick = 0; end
+end
+
 // ------------------------------------------------------------- slot dump
 integer fd = 0, d0 = -1, d1 = -1, sn;
 reg [127:0] st;
-always @(posedge clk) if (ce && u_ymf.sample_tick && fd != 0) begin
+always @(posedge ck) if (ce && u_ymf.sample_tick && fd != 0) begin
 	if (clocks / 96000 >= d0 && clocks / 96000 < d1)
 		for (sn = 0; sn < 48; sn = sn + 1) begin
 			st = u_ymf.synth.st_mem[sn];
@@ -110,7 +131,7 @@ initial begin
 	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
 	if (!$value$plusargs("MS=%d", MS))     MS = 10000;
 	if (!$value$plusargs("LAT=%d", LAT))   LAT = 16;
-	OUTDIR = {"simout/ymf-", GAME};
+	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = {"simout/ymf-", GAME};
 	if ($value$plusargs("DUMP0=%d", d0) && $value$plusargs("DUMP1=%d", d1)) fd = $fopen({OUTDIR, "/rtl_slots.txt"}, "w");
 	fi = $fopen({"roms/", GAME, "/ymf.bin"}, "rb");
 	if (fi == 0) begin $display("FATAL no roms/%s/ymf.bin", GAME); $finish; end
@@ -130,11 +151,16 @@ initial begin
 		if (t * 1000 >= MS) break;
 		due = longint'(t * HZ);
 		while (clocks < due) @(posedge clk);
-		addr <= a16[3:0]; din <= data[7:0]; wr <= 1; @(posedge clk); @(posedge clk); wr <= 0;   // spans a ce
+		if (OWN) begin   // one clock of the chip's own
+			@(posedge ck); addr <= a16[3:0]; din <= data[7:0]; wr <= 1; @(posedge ck); wr <= 0;
+		end else begin
+			addr <= a16[3:0]; din <= data[7:0]; wr <= 1; @(posedge clk); @(posedge clk); wr <= 0;   // spans a ce
+		end
 		n_wr = n_wr + 1;
 	end
 	while (clocks < longint'(MS * HZ / 1000)) @(posedge clk);
 	$fclose(fa); fa = 0;
+	$display("YMF fetches: %0d total, %0d in the busiest tick", f_total, f_max);
 	$display("YMF: %0d ms, %0d writes, %0d samples, worst dbg_overrun %0d -> %s/rtl_audio.raw",
 	         MS, n_wr, n_samp, max_over, OUTDIR);
 	$finish;

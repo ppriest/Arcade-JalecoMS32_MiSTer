@@ -129,7 +129,7 @@ drop pixels rather than stall the display. Measure on captures before sizing any
 per line from a capture's ROZ registers for free.
 
 Wrapping is always on, as MAME has it; the driver's own note that this is wrong for four games goes
-in `MAME_DIVERGENCE.md` when it is implemented.
+in `MAME_KLUDGES.md` when it is implemented.
 
 ## Sprite engine
 

@@ -343,6 +343,22 @@ The same holds for anything else a download writes. `ms32_video`'s registers wer
 during the download: all dropped, the TX layer drawn at power-up scroll on the board while the bench,
 which does not hold reset across the load, matched MAME.
 
+### [MS32] Put the OSD Reset entries before the joystick lines in CONF_STR
+
+`"T[0],Reset;"` and `"R[0],Reset and close OSD;"` placed after `"J1,..."` and `"jn,..."` were shown in
+the OSD and did nothing: the core never reset. Nothing in the RTL was wrong -- `system_tb` with the
+core reset pulsed at frame 200 rendered frame 500 identical to a fresh boot's frame 300 -- so reading
+the reset logic kept finding nothing. Seta, Fuuki and Psikyo, whose Reset works, all list it before
+their joystick lines.
+
+The ISSP probe settled it on the board: pressing Reset counted 0 rises of `status[0]` and 0 core
+resets. With the entries moved above `J1` (commit `aec3176`), the same press counted 1 `status[0]`
+rise, 1 core reset of 1,079 clocks and the V70 held. The same commit also dropped two empty names
+from the end of the `jn` line, so which of the two changes mattered is not isolated.
+
+Rule: when an OSD entry appears but its status bit never moves, count the bit on the board before
+reading the core's logic; and copy the order of a working core's CONF_STR.
+
 ### Measure at the pins, not at the intent
 
 The decisive measurement for the reset bug was counting real commands on

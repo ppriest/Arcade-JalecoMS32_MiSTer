@@ -47,7 +47,7 @@ module sdram_chip_model_wide (
 		addr_of = {bank, row, col};
 	endfunction
 
-	logic [12:0] open_row [0:1];
+	logic [12:0] open_row [0:3];   // one per bank: SDRAM_BA is two bits (it was [0:1], which misread banks 2-3)
 	logic [12:0] mode_reg;
 	wire  [2:0] cas_latency_field  = mode_reg[6:4];
 	wire  [2:0] burst_length_field = mode_reg[2:0];

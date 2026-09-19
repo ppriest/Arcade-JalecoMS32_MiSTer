@@ -35,7 +35,10 @@ DATA_END = {(s, r): max(o + n * {"L": 1, "B": 4, "W": 2}[k] - (o & 3 if k != "L"
             for s, regs in _ROMS.items() for r, _, parts in regs if parts}
 
 KEY_INDEX = {"ss91022_10": 0, "ss92046_01": 1, "ss92047_01": 2, "ss92048_01": 3}
-RBF = "Arcade-JalecoMS32"
+# The core's name on the device. The released .rbf keeps the repository's
+# Arcade-JalecoMS32_<date>.rbf; it is renamed without "Arcade-" on install
+# (README, "Installation"), and scripts/deploy.py copies it under that name.
+RBF = "JalecoMS32"
 # The .mra name is MAME's description with " / " as " - " (a file name cannot hold a
 # slash); gametngk's is shortened to the name its first .mra shipped under.
 NAMES = {s: g["name"].replace(" / ", " - ") for s, g in GAMES.items()}

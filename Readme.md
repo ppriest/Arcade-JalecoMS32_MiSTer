@@ -5,12 +5,12 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 
 ## Contents
 
+- [History](#history)
 - [Games](#games)
   - [Game Notes](#game-notes)
   - [Supported](#supported)
   - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
-- [History](#history)
 - [Installation](#installation)
 - [Status](#status)
   - [Todo](#todo)
@@ -20,6 +20,25 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 - [Acknowledgements](#acknowledgements)
 - [Layout](#layout)
 - [License](#license)
+
+## History
+
+* **`Arcade-JalecoMS32_20260919.rbf`**
+  * P-47 Aces' slowdown and pitch-bending resolved
+  * Gratia slowdown fixed
+  * The Game Paradise: Graphical glitches from the ROZ layer fixed
+  * CRT adjust: H-Size, H-Position, V-Shift
+  * Pause button; OSD Reset works; Stereo Mix option; keyboard 5 and 6 insert coins
+  * Core name on the device is `JalecoMS32` (see Installation)
+
+* **`Arcade-JalecoMS32_20260913.rbf`** (commit `4be9bdf`) **Alpha**
+  * First release
+  * Sound: Good in Desert War and Tetris Plus 2
+  * Sound commands no longer lost: the V70 waits 40 us after each one, as MAME does. Before this
+    Hayaoshi Quiz Grand Champion Taikai was silent and The Game Paradise made only occasional sounds
+  * Games appear playable
+  * Keyboard controls map to Mahjong keys
+  * NVRAM, DIP menus, HDMI rotation/flip 180
 
 ## Games
 
@@ -35,7 +54,9 @@ The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
 * Left Shift - Reach
 * Z - Ron
 * 1 - Start (joystick Start works too). 
-* Coins - stay on the joystick.
+* 5 - Coin 1, 6 - Coin 2 (on every set; joystick Coin works too)
+
+Every set: the joystick Pause button toggles a pause of the main CPU. The picture holds; the sound board keeps running, so a note or loop that was playing carries on.
 
 ### Supported
 
@@ -51,7 +72,7 @@ The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
 | Desert War - Wangan Sensou (ver 1.0) | 1995 | Jaleco | SS91022-10 | ROT270. Sound good |
 | Gratia - Second Earth (ver 1.0) | 1996 | Jaleco | SS92047-01 | |
 | World PK Soccer V2 (ver 1.1) | 1996 | Jaleco | SS92046-01 | Swapped vblank/field interrupts |
-| Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong keys from a keyboard. Attract mode and service menu run on the board |
+| Idol Janshi Suchie-Pai II (ver 1.1) | 1994 | Jaleco | SS92048-01 | Mahjong keys from a keyboard, checked on the board |
 | Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
 | Ryuusei Janshi Kirara Star (ver 1.0) | 1996 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
 | Vs. Janshi Brandnew Stars (Ver 1.1, MegaSystem 32 Version) | 1997 | Jaleco | SS92046-01 | Mahjong keys from a keyboard |
@@ -79,20 +100,11 @@ from `ROM_START`.
 | Z80 | Sound CPU, 8 MHz | Vendored |
 | YMF271 | FM + PCM sound | Vendored Seibu SPI core. Spectrum correlates with MAME, RMS within 2% |
 
-## History
-
-* **`Arcade-JalecoMS32_20260913.rbf`** (commit `4be9bdf`) **Alpha**
-  * First release
-  * Sound: Good in Desert War and Tetris Plus 2
-  * Sound commands no longer lost: the V70 waits 40 us after each one, as MAME does. Before this
-    Hayaoshi Quiz Grand Champion Taikai was silent and The Game Paradise made only occasional sounds
-  * Games appear playable
-  * Keyboard controls map to Mahjong keys
-  * NVRAM, DIP menus, HDMI rotation/flip 180
-
 ## Installation
 
-* Take the latest `*.rbf` and put it in `_Arcade/cores`
+* Take the latest `*.rbf` and put it in `_Arcade/cores`, renamed without the `Arcade-` prefix:
+  `Arcade-JalecoMS32_20260919.rbf` becomes `JalecoMS32_20260919.rbf`. The `.mra` files look for
+  `JalecoMS32`
 * Take the `*.mra` files from `releases/` and `releases/_alternatives/` and put them in `_Arcade`
 * Put the MAME ROMs in `games/mame`
 
@@ -102,34 +114,62 @@ Initial release. Much untested.
 
 * Sound is not yet rechecked in every game since the lost-command fix
 * World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
+* P-47 Aces' audio pitch was low and wandered: the YMF271 missed ~5% of its 44.1 kHz sample ticks
+  (ISSP probe V, build `70897e0`). Two changes: sprites to the lowest-priority SDRAM port (`dd52dda`,
+  halved the misses) and the YMF271 on its own 56.47 MHz clock (`2b3b15d`; no missed tick in
+  `sim/ymf_own_tb`). On the board P-47 Aces now nearly keeps up with MAME and The Game Paradise is
+  fine.
+* Gratia slows down much more than MAME (on the board, build `2b3b15d`). The video engines and the
+  YMF271 had no overruns (ISSP probe V), so the V70 is the limit: in `system_tb` it was held for up to
+  137,141 clocks a frame waiting on object RAM. `cc45883` posts its object RAM writes through a
+  queue; in the same 1,200-frame run the frames held over 20,000 clocks drop from 36 to 4. Not yet
+  compared with MAME on the board.
+* The Game Paradise title screen occasionally showed the Japanese title for a frame with the Language
+  DIP on English (on the board, before and after `102bffd`; MAME does not). Not caused by a bad DIP
+  read: the V70 read the DIP switches 6,022 times, all equal to the switch register (ISSP probe V).
+  Not seen again after the first working OSD Reset (`aec3176`); unexplained.
+* The Game Paradise attract (MAME frame 1326): a screen-shaped shadow sprite is drawn over the
+  green-haired girl instead of under her. MAME draws the same; its shadow-sprite handling is a guess
+  (`ms32.cpp`, "gametngk seems to need some kind of shadow sprites"). Parked.
+* The Game Paradise: against footage of the real board
+  ([PCB #7 The Game Paradise! (Game Tengoku)](https://www.youtube.com/watch?v=GCWV1hdBEBc)), the
+  graphics are not authentic in places, the shadows especially. The ship standing still in the
+  attract's gameplay section is authentic: the board does the same.
+* ROZ layer at steep rotation angles showed vertical stripes of stale pixels at the end of each line
+  (the right of the unrotated picture, the left on ROT270 sets): lines not rendered in time, because
+  the 64-entry ROM cache refilled on nearly every pixel. Since `102bffd` the cache is 2-way with 2,048
+  sets, and vblank warms it with line 0. In `sim/layers_tb +SWEEP=1` (0-90 degrees at zooms 0.5, 1
+  and 2) the worst line at ROM latency 24 went from overrunning to 4,928 of 6,144 clocks, and 3,888
+  away from exactly 90 degrees. The Game Paradise's rotating scenes checked on the board (`102bffd`).
 
 ### Todo
 
 - [ ] Recheck sound across the game list
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
 - [x] Mahjong inputs
-- [ ] CRT Offset
+- [ ] CRT Offset: OSD CRT adjust with H-Size, H-Position and V-Shift (no V-size) is in; not yet checked on a CRT
 - [ ] Fast ROM loading
 - [ ] Hiscore
 - [ ] DIP Flipscreen
 
 ### Resource usage
 
-`MS32` at commit `4be9bdf` (the 20260913 release, fitter seed 3), on the DE10-nano's Cyclone V
-5CSEBA6, speed grade 7; clk_sys setup slack +0.029 ns:
+`MS32` at commit `102bffd` (fitter seed 3), on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7;
+clk_sys setup slack +0.615 ns:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 35,315 (84%) | 41,910 |
-| Block memory bits | 4,309,048 (76%) | 5,662,720 |
-| RAM blocks | 553 (100%) | 553 |
+| Logic (ALMs) | 35,312 (84%) | 41,910 |
+| Block memory bits | 4,126,329 (73%) | 5,662,720 |
+| RAM blocks | 527 (95%) | 553 |
 | DSP blocks | 58 (52%) | 112 |
 | PLLs | 3 | 6 |
 
-Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits, so a 32,768-word
-RAM costs 32 blocks per 10 bits of width. The per-RAM figures are estimated from commit `db73165`'s
-Analysis & Synthesis RAM Summary as the fewest M10K configurations (8192×1 … 256×40) that hold
-each RAM; they sum to 521 against that build's fitter count of 517.
+Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits (256 of up to 40),
+and each inferred RAM takes whole blocks, so a 48-entry register file costs the same block as a
+1,024-word table. Per RAM, from the Fitter RAM Summary of commit `02fc1b1`, less the object RAM that
+`78760b1` moved to SDRAM, with the ROZ cache as `102bffd` builds it (the `02fc1b1` rows summed to 564
+against that fitter's device total of 553):
 
 | RAM | words × width | M10K |
 |---|---|---|
@@ -137,18 +177,20 @@ each RAM; they sum to 521 against that build's fitter count of 517.
 | Palette, RG words | 32,768 × 16 | 64 |
 | Palette, B words | 32,768 × 16 | 64 |
 | ROZ VRAM | 32,768 × 16 | 64 |
-| Object RAM (the vblank copy is in DDR3) | 32,768 × 16 | 64 |
-| Framework scaler (`ascal`) | various | 42 |
+| Framework scaler (`ascal`) | various | 41 |
+| YMF271 (22 small RAMs and ROMs, one block or more each) | various | 25 |
 | TX VRAM | 8,192 × 16 | 16 |
 | BG VRAM | 8,192 × 16 | 16 |
+| Z80 RAM | 16,384 × 8 | 16 |
+| Line buffers (TX, BG, ROZ, sprite line), DDR3 mux FIFO | various | 14 |
 | NVRAM | 8,192 × 8 | 8 |
 | Program ROM cache | 1,024 × 72 | 8 |
 | Priority RAM | 8,192 × 8 | 8 |
+| Framework OSD (HDMI, VGA), shadow mask | various | 9 |
+| Object copy staging and window | various | 7 |
 | Register readback | 1,024 × 32 | 4 |
 | ROZ line RAM | 2,048 × 16 | 4 |
-| Framework OSD (HDMI, VGA), shadow mask, VGA scaler output | various | 13 |
-| Line buffers, ROZ cache, object copy staging and window | various | 18 |
-| **Total** | | **521** |
+| ROZ ROM cache | 2,048 × 169 | 34 |
 
 ## AI Attestation
 
@@ -157,7 +199,9 @@ This core is being developed with heavy use of a frontier coding assistant.
 ## Verification
 
 Not PCB-validated. MAME is the accuracy reference, with its own acknowledged uncertainties noted
-where they matter.
+where they matter: [`docs/MAME_KLUDGES.md`](docs/MAME_KLUDGES.md) lists MAME's guesses and hacks and
+what the core does with each. Where Charles MacDonald measured the hardware (the notes at the top of
+`ms32.cpp`), [`docs/HARDWARE_NOTES.md`](docs/HARDWARE_NOTES.md) checks the core against every point.
 
 * Hardware facts come from the MAME driver and are verified against it.
   * The tile ROM decryption is checked byte for byte against MAME's decrypted regions
@@ -177,9 +221,12 @@ where they matter.
   - the SDRAM controller (`sdram.sv`, vendored via
     [Arcade-Jackal_MiSTer](https://github.com/MiSTer-devel/Arcade-Jackal_MiSTer), with burst-4
     reads added)
+- **Charles MacDonald** for the hardware notes at the top of MAME's `ms32.cpp`: the memory map,
+  mirroring, sound latches, sound reset, I/O ports and V70 details measured on a Desert War board
+- **Zakk** ([zakk4223](https://github.com/zakk4223)) for the YMF271 (OPX) sound chip implementation from [Arcade-SeibuSPI_MiSTer](https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer)
 - **Meathax** for the V60/V70 CPU core from the Sega System 32 core,
   [meathax/s32](https://github.com/meathax/s32), and its verification suite which are derived from MAME.
-- The **MAMEdev team** — in particular **Sylvian Glaize**, **Farfetch'd**, **David Haywood**, **Paul Priest** and **Luca Elia** — for
+- The **MAMEdev team** — in particular **David Haywood**, **Paul Priest** and **Luca Elia** — for
   [MAME](https://github.com/mamedev/mame)'s `jaleco/ms32.cpp`, `ms32_v.cpp`, `ms32_sprite.cpp`,
   `jaleco_ms32_sysctrl.cpp` and `jalcrpt.cpp`, and **Farfetch'd** and **R. Belmont** for its V60
   core, which is the behavioural contract of the CPU core here.

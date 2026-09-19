@@ -7,7 +7,7 @@
   <setname>wpksocv2</setname>
   <year>1996</year>
   <manufacturer>Jaleco</manufacturer>
-  <rbf>Arcade-JalecoMS32</rbf>
+  <rbf>JalecoMS32</rbf>
   <mameversion>0286</mameversion>
   <switches default="FF,FF,1F,FF" base="0">
     <dip name="Demo Sounds" bits="12" ids="Off,On"/>

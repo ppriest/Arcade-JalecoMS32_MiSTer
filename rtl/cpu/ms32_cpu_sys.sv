@@ -18,13 +18,19 @@
 // am = a & 0xC3FFFFFF picks the region and the bits each mirror leaves
 // live index it. The 8- and 16-bit regions sit behind umask32: a read
 // returns one byte or halfword zero-extended, a write takes lanes 0 or 0-1.
-// I/O is decoded on the full address. Unmapped reads return 0.
+// I/O is decoded on the full address. Unmapped reads return 0, except where
+// MacDonald's notes give a value (the unused FC600000 block, a read of the
+// sound latch).
 //
 // BUS TIMING. ms32_v70_bus holds m_req until m_ack. Every access here is
 // accepted in B_IDLE (RAM address and write enable driven that clock, the
 // RAMs' read data registered on the same edge), answered from B_ACK one
 // clock later with one clock of m_ack, and B_DRAIN lets m_req fall. ROM
 // reads wait in B_ROM for the cache.
+//
+// HARDWARE NOTES. Charles MacDonald's measurements of a Desert War board head
+// MAME's ms32.cpp; docs/HARDWARE_NOTES.md checks this module against each
+// (memory map, mirroring, sound latches, I/O ports, unused-space reads).
 //
 // CAPTURE PLAYBACK. While the core is held in reset (cpu_run low) the bus
 // belongs to the capture loader, whose writes arrive from clk_sys at real
@@ -38,6 +44,7 @@ module ms32_cpu_sys #(
 	input  logic        clk_sys,
 	input  logic        rst_sys,          // clk_sys: whole block (not held by a capture load)
 	input  logic        cpu_run_sys,      // clk_sys: 0 holds the V70 in reset
+	input  logic        pause_sys,        // clk_sys: 1 suspends the V70 (level)
 	input  logic        invert_lines,     // static, from the mod byte
 
 	// clk_sys: inputs, active low as the board reads them
@@ -62,6 +69,18 @@ module ms32_cpu_sys #(
 	input  logic        snd_tomain_we,
 	input  logic [7:0]  snd_tomain_data,
 
+	// clk_sys: object RAM. Writes are posted into a queue (ms32_cdc_fifo) that
+	// ms32_objram pops; reads are requests answered by it, issued once every
+	// write before them has left the queue.
+	output logic        wq_valid,         // the queue's head is on wq_data
+	output logic [32:0] wq_data,          // {lanes[1:0], u16 index[14:0], data[15:0]}
+	input  logic        wq_pop,
+	output logic [5:0]  wq_level,         // entries ms32_objram can see
+	output logic        obj_req,          // one clock; obj_addr holds until obj_valid
+	output logic [14:0] obj_addr,
+	input  logic        obj_valid,
+	input  logic [15:0] obj_rdata,
+
 	// clk_sys: program ROM granules, ROM-local granule index (x8 bytes)
 	output logic        rom_req,
 	output logic [17:0] rom_addr,
@@ -85,7 +104,6 @@ module ms32_cpu_sys #(
 	output logic [12:0] bgram_addr,  output logic bgram_wel,  output logic bgram_weh,  input logic [15:0] bgram_rdata,
 	output logic [14:0] rozram_addr, output logic rozram_wel, output logic rozram_weh, input logic [15:0] rozram_rdata,
 	output logic [10:0] lineram_addr,output logic lineram_wel,output logic lineram_weh,input logic [15:0] lineram_rdata,
-	output logic [14:0] objram_addr, output logic objram_wel, output logic objram_weh, input logic [15:0] objram_rdata,
 	output logic [15:0] palram_addr, output logic palram_wel, output logic palram_weh, input logic [15:0] palram_rdata,
 	output logic [12:0] priram_addr, output logic priram_we,                            input logic [7:0]  priram_rdata,
 	output logic [15:0] vram_wdata,
@@ -93,7 +111,12 @@ module ms32_cpu_sys #(
 	// clk_cpu: debug
 	output logic [31:0] dbg_pc,
 	output logic [31:0] dbg_accesses,
-	output logic [31:0] dbg_cache_hits, dbg_cache_misses
+	output logic [31:0] dbg_cache_hits, dbg_cache_misses,
+	// clk_cpu: the V70's 32-bit reads of the DIP switches at 0xFCC00010 as the
+	// core sees them (after ms32_v70_bus), those that differ from the switch
+	// register, and the last such value
+	output logic [15:0] dbg_dsw_reads, dbg_dsw_bad,
+	output logic [31:0] dbg_dsw_last_bad
 );
 
 	// ------------------------------------------------------------- resets
@@ -103,6 +126,17 @@ module ms32_cpu_sys #(
 		rst_sy <= {rst_sy[1:0], rst_sys};
 		run_sy <= {run_sy[1:0], cpu_run_sys};
 	end
+	// PAUSE. The V70 is suspended at its bus, not by its clock enable: the bus
+	// adapter samples the one-clock m_ack only while ce is high, so gating ce
+	// could lose an acknowledge. Instead no new bus access or instruction
+	// fetch is accepted while paused; a transfer already accepted completes,
+	// and the core waits in its own handshake within an instruction or so.
+	// Interrupts stay pending. Not while the capture loader owns the bus.
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [1:0] pause_sy = 2'b00;
+	always_ff @(posedge clk_cpu) pause_sy <= {pause_sy[0], pause_sys};
+	wire pause = pause_sy[1];
+
 	wire rst      = rst_sy[2];
 	wire rst_core = rst_sy[2] | ~run_sy[2];
 
@@ -190,20 +224,35 @@ module ms32_cpu_sys #(
 	wire is_dsw     = (a == 32'hfcc0_0010);
 	wire is_sndres  = (a == 32'hfd00_0000);
 	wire is_mjsel   = (a == 32'hfd1c_0000);
+	// MacDonald: FC600000-FC7FFFFF is unused and reads $FFFFFFFF; a read of the
+	// sound latch at FC800000 returns $FFFF in D15-D0 (D31-D16 open bus, 0 here)
+	wire is_unused_ff = (a[31:21] == 11'b1111_1100_011);
 	// the register block's RAM-backed ranges read back; the rest is write-only
 	wire regs_rd    = (a[11:0] >= 12'h200 && a[11:0] < 12'h280) || (a[11:0] >= 12'h600 && a[11:0] < 12'h660) ||
 	                  (a[11:0] >= 12'ha00 && a[11:0] < 12'ha38);
 
-	typedef enum logic [3:0] {
-		R_NONE, R_ROM, R_WRAM, R_NVRAM, R_PRI, R_PAL, R_ROZ, R_LINE, R_OBJ, R_TX, R_BG, R_REGS, R_IN, R_DSW, R_SND
+	typedef enum logic [4:0] {
+		R_NONE, R_ROM, R_WRAM, R_NVRAM, R_PRI, R_PAL, R_ROZ, R_LINE, R_OBJ, R_TX, R_BG, R_REGS, R_IN, R_DSW, R_SND,
+		R_ALLF, R_CMDRD
 	} region_t;
 	region_t rsel;
 
-	typedef enum logic [2:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN, B_SPIN} bst_t;
+	typedef enum logic [2:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN, B_SPIN, B_OBJ, B_OBJW, B_OBJR} bst_t;
 	logic [9:0] spin_cnt;
 	bst_t bst;
-	wire accept = (bst == B_IDLE) && m_req && !m_ack;
+	wire accept = (bst == B_IDLE) && m_req && !m_ack && (!pause || ld_owns);
 	wire wr     = accept && m_we;
+
+	// Simulation only: +WRAM_WAIT=n holds each work RAM access for n more
+	// clocks, to measure what moving that RAM to SDRAM would cost the game
+	// (ROADMAP, "Offload candidates").
+`ifdef VERILATOR
+	int unsigned sim_wram_wait = 0;
+	initial void'($value$plusargs("WRAM_WAIT=%d", sim_wram_wait));
+	wire [9:0] sim_wait = is_wram ? 10'(sim_wram_wait) : 10'd0;
+`else
+	wire [9:0] sim_wait = 10'd0;
+`endif
 	wire [1:0] lanes16 = m_be[1:0];
 
 	// ------------------------------------------------------------- RAMs
@@ -241,7 +290,6 @@ module ms32_cpu_sys #(
 	assign bgram_addr   = a[14:2];  assign bgram_wel   = wr && is_bg      && lanes16[0]; assign bgram_weh   = wr && is_bg      && lanes16[1];
 	assign rozram_addr  = a[16:2];  assign rozram_wel  = wr && is_rozram  && lanes16[0]; assign rozram_weh  = wr && is_rozram  && lanes16[1];
 	assign lineram_addr = a[12:2];  assign lineram_wel = wr && is_lineram && lanes16[0]; assign lineram_weh = wr && is_lineram && lanes16[1];
-	assign objram_addr  = a[16:2];  assign objram_wel  = wr && is_objram  && lanes16[0]; assign objram_weh  = wr && is_objram  && lanes16[1];
 	assign palram_addr  = a[17:2];  assign palram_wel  = wr && is_palram  && lanes16[0]; assign palram_weh  = wr && is_palram  && lanes16[1];
 	assign priram_addr  = a[14:2];  assign priram_we   = wr && is_priram  && m_be[0];
 
@@ -303,7 +351,7 @@ module ms32_cpu_sys #(
 	logic [63:0] g_data;
 	ms32_rom_cache u_cache (
 		.clk(clk_cpu), .reset(rst),
-		.if_req(if_req), .if_addr(if_addr[20:0]), .if_ack(if_ack), .if_data(if_data),
+		.if_req(if_req & ~pause), .if_addr(if_addr[20:0]), .if_ack(if_ack), .if_data(if_data),   // taken only from C_IDLE
 		.d_req(d_req), .d_addr(a[20:0]), .d_ack(d_ack), .d_rdata(d_rdata),
 		.g_req(g_req), .g_addr(g_addr), .g_ack(g_ack), .g_data(g_data),
 		.hits(dbg_cache_hits), .misses(dbg_cache_misses)
@@ -315,24 +363,51 @@ module ms32_cpu_sys #(
 		.d_req(rom_req), .d_addr(rom_addr), .d_valid(rom_valid), .d_rdata(rom_data)
 	);
 
+	// ------------------------------------------------------------- object RAM
+	// In SDRAM behind ms32_objram. A write is acknowledged once it is in the
+	// queue (B_OBJW only while the queue is full): waiting on SDRAM for each
+	// one cost Gratia whole frames, up to 14,350 object RAM writes in one of
+	// them (system_tb). A read waits in B_OBJR until every earlier write has
+	// left the queue, then is a request the bus waits for in B_OBJ.
+	logic wq_full, wq_empty;
+	wire  wq_push = !wq_full && ((bst == B_IDLE && accept && is_objram && m_we) || bst == B_OBJW);
+	ms32_cdc_fifo #(.W(33), .AW(5)) u_wq (
+		.clk_s(clk_cpu), .rst_s(rst),
+		.s_push(wq_push), .s_data({lanes16, a[16:2], m_wdata[15:0]}), .s_full(wq_full), .s_empty(wq_empty),
+		.clk_d(clk_sys), .rst_d(rst_sys),
+		.d_pop(wq_pop), .d_data(wq_data), .d_valid(wq_valid), .d_level(wq_level)
+	);
+	logic        o_req, o_ack;
+	logic [15:0] o_rdata;
+	ms32_cdc_req #(.AW(15), .DW(16)) u_obj_cdc (
+		.clk_s(clk_cpu), .rst_s(rst),
+		.s_req(o_req), .s_addr(a[16:2]), .s_ack(o_ack), .s_rdata(o_rdata),
+		.clk_d(clk_sys), .rst_d(rst_sys),
+		.d_req(obj_req), .d_addr(obj_addr), .d_valid(obj_valid), .d_rdata(obj_rdata)
+	);
+
 	// ------------------------------------------------------------- bus FSM
 	always_ff @(posedge clk_cpu) begin
 		m_ack <= 1'b0;
 		if (rst) begin
-			bst <= B_IDLE; d_req <= 1'b0; dbg_accesses <= 32'd0;
+			bst <= B_IDLE; d_req <= 1'b0; o_req <= 1'b0; dbg_accesses <= 32'd0;
 		end else case (bst)
 			B_IDLE: if (accept) begin
 				dbg_accesses <= dbg_accesses + 32'd1;
 				rsel <= is_rom ? R_ROM : is_wram ? R_WRAM : is_nvram ? R_NVRAM : is_priram ? R_PRI :
 				        is_palram ? R_PAL : is_rozram ? R_ROZ : is_lineram ? R_LINE : is_objram ? R_OBJ :
 				        is_tx ? R_TX : is_bg ? R_BG : (is_regs && regs_rd) ? R_REGS :
-				        is_inputs ? R_IN : is_dsw ? R_DSW : is_sndres ? R_SND : R_NONE;
+				        is_inputs ? R_IN : is_dsw ? R_DSW : is_sndres ? R_SND :
+				        is_unused_ff ? R_ALLF : is_sndcmd ? R_CMDRD : R_NONE;
 				if (is_rom && !m_we) begin d_req <= 1'b1; bst <= B_ROM; end
+				else if (is_objram && m_we) bst <= wq_full ? B_OBJW : B_ACK;   // pushed now, or from B_OBJW
+				else if (is_objram) bst <= B_OBJR;
 				// A sound command holds the bus for SND_SPIN clocks before it is
 				// acknowledged. Without it the games' command pairs (prefix, then
 				// parameter) arrived 8 us apart and the Z80, which takes the latch
 				// about 10 us after a write, lost the first of each pair.
 				else if (is_sndcmd && m_we && !ld_owns) begin spin_cnt <= 10'(SND_SPIN); bst <= B_SPIN; end
+				else if (sim_wait != 10'd0 && !ld_owns) begin spin_cnt <= sim_wait - 10'd1; bst <= B_SPIN; end
 				else bst <= B_ACK;
 			end
 			B_ACK: begin
@@ -344,13 +419,15 @@ module ms32_cpu_sys #(
 					R_PAL:   m_rdata <= {16'd0, palram_rdata};
 					R_ROZ:   m_rdata <= {16'd0, rozram_rdata};
 					R_LINE:  m_rdata <= {16'd0, lineram_rdata};
-					R_OBJ:   m_rdata <= {16'd0, objram_rdata};
 					R_TX:    m_rdata <= {16'd0, txram_rdata};
 					R_BG:    m_rdata <= {16'd0, bgram_rdata};
 					R_REGS:  m_rdata <= regs_q;
 					R_IN:    m_rdata <= in_read;
 					R_DSW:   m_rdata <= dsw_s2;
-					R_SND:   m_rdata <= {24'd0, ~to_main};
+					// MacDonald: D15-D8 read $FF, D7-D0 the Z80's byte inverted
+					R_SND:   m_rdata <= {16'd0, 8'hFF, ~to_main};
+					R_ALLF:  m_rdata <= 32'hFFFF_FFFF;
+					R_CMDRD: m_rdata <= 32'h0000_FFFF;
 					default: m_rdata <= 32'd0;
 				endcase
 				bst <= B_DRAIN;
@@ -361,10 +438,31 @@ module ms32_cpu_sys #(
 				m_ack   <= 1'b1;
 				bst     <= B_DRAIN;
 			end
+			B_OBJW: if (!wq_full) bst <= B_ACK;
+			B_OBJR: if (wq_empty) begin o_req <= 1'b1; bst <= B_OBJ; end
+			B_OBJ: if (o_ack) begin
+				o_req   <= 1'b0;
+				m_rdata <= {16'd0, o_rdata};
+				m_ack   <= 1'b1;
+				bst     <= B_DRAIN;
+			end
 			B_SPIN: if (spin_cnt == 10'd0) bst <= B_ACK; else spin_cnt <= spin_cnt - 10'd1;
 			B_DRAIN: bst <= B_IDLE;
 			default: bst <= B_IDLE;
 		endcase
+	end
+
+	// ------------------------------------------------------------- DIP read check
+	always_ff @(posedge clk_cpu) begin
+		if (rst) begin
+			dbg_dsw_reads <= 16'd0; dbg_dsw_bad <= 16'd0; dbg_dsw_last_bad <= 32'd0;
+		end else if (c_req && c_ack && !c_we && c_addr == 32'hFCC0_0010 && c_size == 2'd2) begin
+			if (dbg_dsw_reads != 16'hFFFF) dbg_dsw_reads <= dbg_dsw_reads + 16'd1;
+			if (c_rdata != dsw_s2) begin
+				if (dbg_dsw_bad != 16'hFFFF) dbg_dsw_bad <= dbg_dsw_bad + 16'd1;
+				dbg_dsw_last_bad <= c_rdata;
+			end
+		end
 	end
 
 	// ------------------------------------------------------------- registers, interrupts

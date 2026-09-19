@@ -7,7 +7,7 @@
   <setname>hayaosi3</setname>
   <year>1994</year>
   <manufacturer>Jaleco</manufacturer>
-  <rbf>Arcade-JalecoMS32</rbf>
+  <rbf>JalecoMS32</rbf>
   <mameversion>0286</mameversion>
   <switches default="FF,FF,FF,FF" base="0">
     <dip name="Demo Sounds" bits="1" ids="Off,On"/>

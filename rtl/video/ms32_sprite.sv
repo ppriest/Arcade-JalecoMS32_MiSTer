@@ -96,19 +96,26 @@ module ms32_sprite (
 	wire [7:0]  ty      = w[1][15:8];
 	wire [11:0] page    = w[2][11:0];
 	wire [3:0]  colour  = w[2][15:12];
-	wire [31:0] srcendx = {15'd0, w[3][7:0] + 9'd1, 8'd0};      // (srcw) << 8
-	wire [31:0] srcendy = {15'd0, w[3][15:8] + 9'd1, 8'd0};
-	wire [31:0] srcstartx = {16'd0, tx, 8'd0};
-	wire [31:0] srcstarty = {16'd0, ty, 8'd0};
-	wire signed [31:0] sy0 = {{22{w[4][9]}}, w[4][9:0]};
-	wire signed [31:0] sx0 = {{21{w[5][10]}}, w[5][10:0]};
-	wire [31:0] incx = {16'd0, w[6]};
-	wire [31:0] incy = {16'd0, w[7]};
+	// Widths are the largest value each can hold (MAME's are all 32 bits):
+	//   srcend <= 0x10000 (17), srcstart <= 0xFF00 (16), inc <= 0xFFFF (16)
+	//   srcx/srcy after the clip <= 1024 x 0xFFFF (26); in a row srcx < srcendx
+	//   cursrcx < srcendx + incx (18); pxabs = srcstartx + source x <= 0x1FEFF (17)
+	//   curx/cury and destx/desty are screen positions (12, >= 0 after the clip)
+	wire [16:0] srcendx = {w[3][7:0] + 9'd1, 8'd0};      // (srcw) << 8
+	wire [16:0] srcendy = {w[3][15:8] + 9'd1, 8'd0};
+	wire [16:0] srcstartx = {1'b0, tx, 8'd0};
+	wire [16:0] srcstarty = {1'b0, ty, 8'd0};
+	wire signed [11:0] sy0 = {{2{w[4][9]}}, w[4][9:0]};
+	wire signed [11:0] sx0 = {w[5][10], w[5][10:0]};
+	wire [15:0] incx = w[6];
+	wire [15:0] incy = w[7];
 
 	// draw state
-	logic signed [31:0] destx, desty;
-	logic [31:0] srcx, srcy, cursrcx;
-	logic [31:0] curx, cury;
+	logic [11:0] destx, desty;
+	logic [25:0] srcx, srcy;
+	logic [17:0] cursrcx;
+	logic [16:0] pxabs;               // page x of the pixel in flight, << 8, stepped by +-incx
+	logic [11:0] curx, cury;
 	logic [8:0]  drawy;               // 9 bits: >= 256 means skip
 	logic [8:0]  drawx;
 	logic        last_valid;
@@ -127,10 +134,16 @@ module ms32_sprite (
 	assign busy    = (state != S_IDLE);
 	assign obj_rd  = (state == S_READ) && (rd_cnt != 4'd0);
 
-	wire [31:0] rowsrc = flipy ? (srcendy - srcy - 32'd1) : srcy;
-	wire [31:0] pixsrc = flipx ? (srcendx - cursrcx - 32'd1) : cursrcx;
-	wire [31:0] drawy_full = (srcstarty + rowsrc) >> 8;
-	wire [31:0] drawx_full = (srcstartx + pixsrc) >> 8;
+	// Used only while srcy < srcendy (S_ROW) and srcx < srcendx (S_CLIP), so
+	// the subtractions cannot go below zero.
+	wire [16:0] rowsrc = flipy ? (srcendy - srcy[16:0] - 17'd1) : srcy[16:0];
+	wire [16:0] drawy_full = srcstarty + rowsrc;           // page y << 8
+	// A flipped row walks the page backwards: pxabs starts at the row's last
+	// source pixel and subtracts incx where the forward walk adds it. MAME
+	// recomputes srcend - cursrcx - 1 for every pixel; the two agree while
+	// cursrcx < srcendx, which is the only time pxabs is used.
+	wire [16:0] pxstart = srcstartx + (flipx ? (srcendx - srcx[16:0] - 17'd1) : srcx[16:0]);
+	wire [16:0] pxnext  = flipx ? (pxabs - {1'b0, incx}) : (pxabs + {1'b0, incx});
 	wire [27:0] gaddr = {page, drawy[7:3], drawx[7:3], drawy[2:0], 3'b000};
 
 	// A row is in progress from S_ROW's start until S_PIX decides it is done;
@@ -186,26 +199,26 @@ module ms32_sprite (
 							state <= S_NEXT;
 						end else begin
 							// left/top clip against 0
-							destx <= (sx0 < 0) ? 32'sd0 : sx0;
-							desty <= (sy0 < 0) ? 32'sd0 : sy0;
-							negx  <= (sx0 < 0) ? 11'(32'd0 - sx0) : 11'd0;
-							negy  <= (sy0 < 0) ? 10'(32'd0 - sy0) : 10'd0;
-							srcx  <= 32'd0;
-							srcy  <= 32'd0;
+							destx <= (sx0 < 0) ? 12'd0 : sx0;
+							desty <= (sy0 < 0) ? 12'd0 : sy0;
+							negx  <= (sx0 < 0) ? 11'(12'd0 - sx0) : 11'd0;
+							negy  <= (sy0 < 0) ? 10'(12'd0 - sy0) : 10'd0;
+							srcx  <= 26'd0;
+							srcy  <= 26'd0;
 							mul_i <= 4'd0;
 							state <= (sx0 < 0 || sy0 < 0) ? S_MUL : S_CLIP;
 						end
 					end
 
 					S_MUL: begin
-						if (negx[mul_i]) srcx <= srcx + (incx << mul_i);
-						if (mul_i < 4'd10 && negy[mul_i]) srcy <= srcy + (incy << mul_i);
+						if (negx[mul_i]) srcx <= srcx + ({10'd0, incx} << mul_i);
+						if (mul_i < 4'd10 && negy[mul_i]) srcy <= srcy + ({10'd0, incy} << mul_i);
 						mul_i <= mul_i + 4'd1;
 						if (mul_i == 4'd10) state <= S_CLIP;
 					end
 
 					S_CLIP: begin
-						if (srcx >= srcendx || srcy >= srcendy) begin
+						if (srcx >= {9'd0, srcendx} || srcy >= {9'd0, srcendy}) begin
 							state <= S_NEXT;
 						end else begin
 							cury  <= desty;
@@ -216,27 +229,29 @@ module ms32_sprite (
 
 					// start a row, or finish the sprite
 					S_ROW: begin
-						if (cury >= {20'd0, vdisplay} || srcy >= srcendy) begin
+						if (cury >= vdisplay || srcy >= {9'd0, srcendy}) begin
 							state <= S_NEXT;
 						end else begin
-							drawy   <= drawy_full[8:0] | {9{|drawy_full[31:9]}};   // saturate: >= 256 skips
-							cursrcx <= srcx;
+							drawy   <= drawy_full[16:8];            // bit 8 set: >= 256, the row is skipped
+							cursrcx <= {1'b0, srcx[16:0]};
+							pxabs   <= pxstart;
 							curx    <= destx;
 							state   <= S_PIX;
 						end
 					end
 
 					S_PIX: begin
-						if (drawy[8] || curx >= {20'd0, hdisplay} || cursrcx >= srcendx) begin
+						if (drawy[8] || curx >= hdisplay || cursrcx >= {1'b0, srcendx}) begin
 							// row done
-							cury  <= cury + 32'd1;
-							srcy  <= srcy + incy;
+							cury  <= cury + 12'd1;
+							srcy  <= srcy + {10'd0, incy};
 							state <= S_ROW;
-						end else if (drawx_full >= 32'd256) begin
-							curx    <= curx + 32'd1;
-							cursrcx <= cursrcx + incx;
+						end else if (pxabs[16]) begin               // page x >= 256: skip the pixel
+							curx    <= curx + 12'd1;
+							cursrcx <= cursrcx + {2'd0, incx};
+							pxabs   <= pxnext;
 						end else begin
-							drawx <= drawx_full[8:0];
+							drawx <= pxabs[16:8];
 							state <= S_WR;      // S_WR decides between the kept granule and a fetch
 						end
 					end
@@ -273,8 +288,9 @@ module ms32_sprite (
 									fb_y    <= cury[7:0];
 									fb_data <= {pri, colour, pen};
 								end
-								curx    <= curx + 32'd1;
-								cursrcx <= cursrcx + incx;
+								curx    <= curx + 12'd1;
+								cursrcx <= cursrcx + {2'd0, incx};
+								pxabs   <= pxnext;
 								state   <= S_PIX;
 							end
 						end else begin

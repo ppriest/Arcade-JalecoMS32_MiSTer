@@ -13,6 +13,11 @@
 //  later. Nothing here knows a layer's format: the bench moves bytes from
 //  files into memories and pixels from ports into files, and reports the
 //  heaviest line the ROZ engine met.
+//
+//  +SWEEP=1 then replaces the capture's simple-mode ROZ increments with a
+//  rotation sweep (0-90 degrees in 5 degree steps at zooms 0.5, 1 and 2, one
+//  warm-up frame and one measured frame each) and reports each setting's
+//  heaviest line, its misses and the lines that overran.
 `timescale 1ns/1ps
 
 module tb_layers;
@@ -72,7 +77,7 @@ wire [23:0] tx_addr, bg_addr, rz_addr;
 wire [63:0] tx_data, bg_data, rz_data;
 wire [7:0]  tx_pen, bg_pen, rz_pen;
 wire [3:0]  tx_col, bg_col, rz_col;
-wire        tx_op, bg_op, rz_op, tx_ovr, bg_ovr, rz_ovr, rz_done;
+wire        tx_op, bg_op, rz_op, tx_ovr, bg_ovr, rz_ovr, rz_done, rz_ovr_ev;
 wire [15:0] rz_cyc, rz_miss;
 
 ms32_tilemap #(.TILE_16(1'b0)) u_tx (
@@ -102,7 +107,7 @@ ms32_roz u_roz (
 	.line_addr(rz_la), .line_data(rz_ld),
 	.vram_addr(rz_va), .vram_data(rz_vd),
 	.rom_req(rz_req), .rom_addr(rz_addr), .rom_valid(rz_valid), .rom_data(rz_data),
-	.pen(rz_pen), .colour(rz_col), .opaque(rz_op), .fetch_overrun(rz_ovr), .overrun_ev(),
+	.pen(rz_pen), .colour(rz_col), .opaque(rz_op), .fetch_overrun(rz_ovr), .overrun_ev(rz_ovr_ev),
 	.line_done(rz_done), .line_cycles(rz_cyc), .line_misses(rz_miss)
 );
 
@@ -148,6 +153,10 @@ reg [15:0] out_bg [0:320*224-1];
 reg [15:0] out_rz [0:320*224-1];
 integer frame = 0;
 integer rz_max_cyc = 0, rz_max_miss = 0, rz_sum_miss = 0, rz_lines = 0;
+integer SWEEP, sw_max_cyc = 0, sw_max_miss = 0, sw_sum_miss = 0, sw_lines = 0, sw_ovr = 0, ang, zi;
+reg     sw_clr = 0, sw_rec = 0;
+real    th, zm;
+integer ixx, ixy;
 always @(posedge clk) if (vblank_ev) frame <= frame + 1;
 always @(posedge clk) begin
 	if (ce_pix && h_active && v_active && frame == 2 && hcnt < 320 && vcnt < 224) begin
@@ -160,6 +169,17 @@ always @(posedge clk) begin
 		if (rz_miss > rz_max_miss) rz_max_miss = rz_miss;
 		rz_sum_miss = rz_sum_miss + rz_miss;
 		rz_lines = rz_lines + 1;
+	end
+	if (sw_clr) begin
+		sw_max_cyc = 0; sw_max_miss = 0; sw_sum_miss = 0; sw_lines = 0; sw_ovr = 0;
+	end else if (sw_rec) begin
+		if (rz_done) begin
+			if (rz_cyc  > sw_max_cyc)  sw_max_cyc  = rz_cyc;
+			if (rz_miss > sw_max_miss) sw_max_miss = rz_miss;
+			sw_sum_miss = sw_sum_miss + rz_miss;
+			sw_lines = sw_lines + 1;
+		end
+		if (rz_ovr_ev) sw_ovr = sw_ovr + 1;
 	end
 end
 
@@ -216,20 +236,41 @@ initial begin
 	@(posedge clk);
 
 	fd = $fopen({OUTDIR, "/sim_tx.txt"}, "w"); if (!fd) begin $display("FATAL cannot write to %s", OUTDIR); $finish; end
-	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x
-", out_tx[k]);
+	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x\n", out_tx[k]);
 	$fclose(fd);
 	fd = $fopen({OUTDIR, "/sim_bg.txt"}, "w");
-	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x
-", out_bg[k]);
+	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x\n", out_bg[k]);
 	$fclose(fd);
 	fd = $fopen({OUTDIR, "/sim_roz.txt"}, "w");
-	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x
-", out_rz[k]);
+	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%04x\n", out_rz[k]);
 	$fclose(fd);
 	$display("frame written to %s; overrun tx=%0d bg=%0d roz=%0d", OUTDIR, tx_ovr, bg_ovr, rz_ovr);
 	$display("roz lines %0d: max %0d clk/line, max %0d misses/line, mean %0d misses/line",
 	         rz_lines, rz_max_cyc, rz_max_miss, rz_lines ? rz_sum_miss / rz_lines : 0);
+	if (!$value$plusargs("SWEEP=%d", SWEEP)) SWEEP = 0;
+	if (SWEEP != 0) begin
+		rozctrl[23] = 32'd0;   // simple mode
+		$display("sweep: zoom angle  max_clk/line  max_miss  mean_miss  overrun_lines (LAT %0d, budget 6144)", LAT);
+		for (zi = 0; zi < 3; zi = zi + 1) begin
+			zm = (zi == 0) ? 0.5 : (zi == 1) ? 1.0 : 2.0;   // source texels per screen pixel
+			for (ang = 0; ang <= 90; ang = ang + 5) begin
+				th  = ang * 3.14159265358979 / 180.0;
+				ixx = $rtoi(256.0 * zm * $cos(th));
+				ixy = $rtoi(256.0 * zm * $sin(th));
+				wait (vblank_ev); @(posedge clk);
+				rozctrl[4]  = ixx & 32'hFFFF;  rozctrl[5]  = (ixx >> 16) & 1;    // incxx
+				rozctrl[6]  = ixy & 32'hFFFF;  rozctrl[7]  = (ixy >> 16) & 1;    // incxy
+				rozctrl[8]  = ixx & 32'hFFFF;  rozctrl[9]  = (ixx >> 16) & 1;    // incyy
+				rozctrl[10] = (-ixy) & 32'hFFFF; rozctrl[11] = ((-ixy) >> 16) & 1; // incyx
+				wait (vblank_ev); @(posedge clk);
+				sw_clr = 1; @(posedge clk); sw_clr = 0; sw_rec = 1;
+				wait (vblank_ev); @(posedge clk);
+				sw_rec = 0;
+				$display("sweep: %4.1f %3d  %5d  %4d  %4d  %4d", zm, ang, sw_max_cyc, sw_max_miss,
+				         sw_lines ? sw_sum_miss / sw_lines : 0, sw_ovr);
+			end
+		end
+	end
 	$finish;
 end
 

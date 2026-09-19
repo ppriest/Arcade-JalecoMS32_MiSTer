@@ -33,7 +33,7 @@ def main():
 <misterromdescription>
   <name>Capture {cap}{' ' + variant if variant else ''}</name>
   <setname>MS32</setname>
-  <rbf>Arcade-JalecoMS32</rbf>
+  <rbf>JalecoMS32</rbf>
   <rom index="1"><part>80</part></rom>   <!-- mod byte: bit 7 holds the V70 -->
   <rom index="2">
     <part>

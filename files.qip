@@ -24,6 +24,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_objram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_sprite.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_sprite_fb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_mixer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_adjust.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_crt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_video.sv
 set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_Pack.vhd
 set_global_assignment -name VHDL_FILE rtl/cpu/t80/T80_MCode.vhd
@@ -37,6 +39,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ymf271/ymf271_synth.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ymf271/ymf271.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/ms32_sound.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/issp_video_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/debug/ms32_capture_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ms32_core.sv
 set_global_assignment -name SDC_FILE MS32.sdc

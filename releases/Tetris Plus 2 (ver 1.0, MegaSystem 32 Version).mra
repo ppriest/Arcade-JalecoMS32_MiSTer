@@ -7,7 +7,7 @@
   <setname>tp2m32</setname>
   <year>1997</year>
   <manufacturer>Jaleco</manufacturer>
-  <rbf>Arcade-JalecoMS32</rbf>
+  <rbf>JalecoMS32</rbf>
   <mameversion>0286</mameversion>
   <switches default="FF,FF,7F,FF" base="0">
     <dip name="Flip Screen" bits="0" ids="On,Off"/>

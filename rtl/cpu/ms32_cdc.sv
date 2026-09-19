@@ -2,7 +2,7 @@
 //
 // Clock-domain crossings between clk_cpu (the V70's domain) and clk_sys.
 // The SDC treats the two clocks as asynchronous; everything that crosses
-// goes through one of these three shapes, and nothing else may.
+// goes through one of these four shapes, and nothing else may.
 //
 //   ms32_cdc_event    a one-clock pulse, as a toggle; events must be further
 //                     apart than three destination clocks
@@ -15,6 +15,10 @@
 //                     four-phase: the source holds s_req until s_ack (one
 //                     clock), the destination sees d_req for one clock and
 //                     must answer with d_valid (and d_rdata) once
+//   ms32_cdc_fifo     a queue: pushes in the source clock, pops in the
+//                     destination's; an entry is written before the pointer
+//                     that exposes it crosses (the V70's posted object RAM
+//                     writes)
 //
 // Payloads are never synchronised bit by bit: they are launched before the
 // control signal that announces them and captured after it has crossed.
@@ -115,3 +119,73 @@ module ms32_cdc_req #(
 		endcase
 	end
 endmodule
+
+// A first-in first-out queue between two clocks: Gray-coded pointers, each
+// crossing through two flops, one push per source clock while not full, one
+// pop per destination clock while not empty (d_data shows the head). Each side
+// sees the other's pointer two or three clocks late, so it may think the queue
+// fuller (source) or emptier (destination) than it is, never the reverse.
+// s_empty tells the source when everything it pushed has been popped;
+// d_level is how many entries the destination can see.
+module ms32_cdc_fifo #(
+	parameter int W  = 33,
+	parameter int AW = 5              // 2**AW entries
+) (
+	input  logic          clk_s,
+	input  logic          rst_s,
+	input  logic          s_push,
+	input  logic [W-1:0]  s_data,
+	output logic          s_full,
+	output logic          s_empty,
+
+	input  logic          clk_d,
+	input  logic          rst_d,
+	input  logic          d_pop,
+	output logic [W-1:0]  d_data,
+	output logic          d_valid,
+	output logic [AW:0]   d_level
+);
+	logic [W-1:0] mem [0:(1 << AW) - 1];
+	logic [AW:0]  wbin = '0, rbin = '0, wgray = '0, rgray = '0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [AW:0]  rg_s1 = '0, rg_s2 = '0;       // read pointer in the source clock
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [AW:0]  wg_d1 = '0, wg_d2 = '0;       // write pointer in the destination clock
+
+	function automatic logic [AW:0] g2b(input logic [AW:0] g);
+		for (int i = AW; i >= 0; i--) g2b[i] = (i == AW) ? g[i] : g2b[i + 1] ^ g[i];
+	endfunction
+
+	// source side
+	wire [AW:0] rb_s = g2b(rg_s2);
+	assign s_full  = (wbin[AW] != rb_s[AW]) && (wbin[AW-1:0] == rb_s[AW-1:0]);
+	assign s_empty = (wbin == rb_s);
+	wire [AW:0] wbin_n = wbin + (AW+1)'(1);
+	always_ff @(posedge clk_s) begin
+		{rg_s2, rg_s1} <= {rg_s1, rgray};
+		if (rst_s) begin
+			wbin <= '0; wgray <= '0;
+		end else if (s_push && !s_full) begin
+			mem[wbin[AW-1:0]] <= s_data;
+			wbin  <= wbin_n;
+			wgray <= wbin_n ^ (wbin_n >> 1);
+		end
+	end
+
+	// destination side
+	wire [AW:0] wb_d = g2b(wg_d2);
+	assign d_valid = (wb_d != rbin);
+	assign d_level = wb_d - rbin;
+	assign d_data  = mem[rbin[AW-1:0]];
+	wire [AW:0] rbin_n = rbin + (AW+1)'(1);
+	always_ff @(posedge clk_d) begin
+		{wg_d2, wg_d1} <= {wg_d1, wgray};
+		if (rst_d) begin
+			rbin <= '0; rgray <= '0;
+		end else if (d_pop && d_valid) begin
+			rbin  <= rbin_n;
+			rgray <= rbin_n ^ (rbin_n >> 1);
+		end
+	end
+endmodule
+

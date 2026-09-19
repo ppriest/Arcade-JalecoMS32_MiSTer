@@ -28,13 +28,19 @@
 // keep their state. The pulse is stretched to RESET_HOLD clocks here so the
 // T80 sees it across clock enables.
 //
+// Charles MacDonald's notes in ms32.cpp describe the latches, the NMI gate and
+// the reset pulse from the board; docs/HARDWARE_NOTES.md says where this
+// module follows them and where it keeps MAME's behaviour (the reset pulse is
+// MAME-short here, about one second on his board).
+//
 // Bus timing, WAIT_n and the ROM handshake: as the Fuuki core's fg3_sound.sv.
 module ms32_sound #(
 	parameter int CEN_DIV    = 12,         // clk_sys 96 MHz / 12 = 8 MHz
-	parameter [28:0] CLK_HZ_X3 = 29'd144000000,   // the YMF271's clock enable rate x 3 (clk / 2)
+	parameter [28:0] CLK_HZ_X3 = 29'd169411765,   // the YMF271's clock x 3: clk_ymf, 960 MHz / 17
 	parameter int RESET_HOLD = 1024
 ) (
 	input  logic        clk,
+	input  logic        clk_ymf,        // the YMF271's own clock, 56.47 MHz, asynchronous to clk
 	input  logic        reset,
 
 	input  logic        snd_reset,      // one clock: sysctrl 0x38 written with bit 0 set
@@ -57,7 +63,8 @@ module ms32_sound #(
 
 	// the chip's outputs 0 and 1 (ms32.cpp routes them left and right)
 	output logic signed [15:0] audio_l,
-	output logic signed [15:0] audio_r
+	output logic signed [15:0] audio_r,
+	output logic        [15:0] dbg_ymf_overrun     // YMF271 passes that missed their 44.1 kHz tick (clk_ymf, sampled)
 );
 
 	// ---------------------------------------------------------------- clock enable, reset
@@ -162,32 +169,105 @@ module ms32_sound #(
 	// ---------------------------------------------------------------- YMF271
 	// No savestates here: every ssbus_if's select is off, so the engine's
 	// savestate sections are constant.
-	// The chip runs on a clock enable every other clock (MS32.sdc gives its
-	// internal paths two): the SeibuSPI engine was closed at 57 MHz. A write
-	// or read strobe is held until a clock with the enable.
+	//
+	// OWN CLOCK. The engine needs 1,104 cycles a sample with all 48 slots
+	// sounding, plus its sample-cache misses; it was closed at 57 MHz for
+	// SeibuSPI (1,298 cycles a sample). On clk_sys's every other clock, 48 MHz,
+	// it had 1,088, and P-47 Aces' attract missed ~2.5% of its 44.1 kHz ticks on
+	// the board: pitch low and wandering. On clk_ymf, 960 MHz / 17, it has 1,280
+	// and sim/ymf_own_tb replays P-47 Aces' first 24 s with no missed tick at
+	// any sample latency tried. Its longest internal path is 16.7 ns.
+	//
+	// The crossings, all through ms32_cdc: Z80 writes as a mailbox (they come
+	// microseconds apart); Z80 reads as a request the Z80 WAITs for, since a
+	// read has side effects (it clears End flags, advances the wave-memory
+	// port) and must reach the chip exactly once; the sample memory's toggle
+	// pair through two flops each way (address and data are held while the
+	// toggles differ); the output through a mailbox fired when it changes.
 	logic [7:0]  ymf_q;
-	logic        ymf_ce, wr_pend, rd_pend;
 	wire         wr_now = wr_end && wa[15:4] == 12'h3F0;
-	wire         rd_now = rd_end && ra[15:4] == 12'h3F0;
+	logic [25:0] pcm_addr26;
+	logic        ymf_done;
+	logic [7:0]  ymf_hold;
+	wire         is_ymf_read = mem_rd && is_ymf;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [1:0] y_rst_sy = 2'b11;
+	always_ff @(posedge clk_ymf) y_rst_sy <= {y_rst_sy[0], reset};
+	wire y_reset = y_rst_sy[1];
+
+	// writes
+	logic        y_wr;
+	logic [11:0] y_wpay;
+	ms32_cdc_mailbox #(.W(12)) u_ywr (
+		.clk_s(clk), .s_pulse(wr_now), .s_data({wa[3:0], wd}),
+		.clk_d(clk_ymf), .d_pulse(y_wr), .d_data(y_wpay)
+	);
+
+	// reads: the Z80 waits in its read until the byte is back
+	logic       rq_ack, rq_d, y_rd, y_rvalid;
+	logic [3:0] rq_a, y_ra;
+	logic [7:0] rq_data, y_rdata, y_dout;
 	always_ff @(posedge clk) begin
-		ymf_ce <= reset ? 1'b0 : ~ymf_ce;
-		if (reset) begin wr_pend <= 1'b0; rd_pend <= 1'b0; end
-		else begin
-			wr_pend <= (wr_now | wr_pend) & ~ymf_ce;
-			rd_pend <= (rd_now | rd_pend) & ~ymf_ce;
+		if (zreset) begin
+			ymf_done <= 1'b0;
+		end else if (rq_ack) begin
+			ymf_done <= 1'b1; ymf_hold <= rq_data;
+		end else if (!is_ymf_read) begin
+			ymf_done <= 1'b0;
 		end
 	end
-	wire         ymf_wr = (wr_now | wr_pend) & ymf_ce;
-	wire         ymf_rd = (rd_now | rd_pend) & ymf_ce;
-	wire  [3:0]  ymf_a  = (wr_now | wr_pend) ? wa[3:0] : (rd_now | rd_pend) ? ra[3:0] : a[3:0];
-	logic [25:0] pcm_addr26;
-`ifdef MS32_SIM_NO_YMF271
-	// sim/sound_tb under ModelSim: timers and status only (see that file)
-	ms32_ymf271_timers #(.TICK_INC(441), .TICK_MOD(int'(CLK_HZ_X3) / 300)) u_ymf (
-		.clk(clk), .reset(reset),
-		.wr(ymf_wr), .wr_addr(wa[3:0]), .din(wd), .rd_addr(a[3:0]), .dout(ymf_q)
+	ms32_cdc_req #(.AW(4), .DW(8)) u_yrd (
+		.clk_s(clk), .rst_s(zreset),
+		.s_req(is_ymf_read && !ymf_done), .s_addr(a[3:0]), .s_ack(rq_ack), .s_rdata(rq_data),
+		.clk_d(clk_ymf), .rst_d(y_reset),
+		.d_req(rq_d), .d_addr(rq_a), .d_valid(y_rvalid), .d_rdata(y_rdata)
 	);
-	assign pcm_req = 1'b0; assign pcm_addr26 = 26'd0; assign audio_l = 16'd0; assign audio_r = 16'd0;
+	// clock 1: the address is on the chip; clock 2: its data is taken and the
+	// read strobe lands, so the side effect follows the byte the Z80 gets
+	logic [1:0] y_rst;
+	always_ff @(posedge clk_ymf) begin
+		y_rvalid <= 1'b0;
+		if (y_reset) y_rst <= 2'd0;
+		else case (y_rst)
+			2'd0: if (rq_d) begin y_ra <= rq_a; y_rst <= 2'd1; end
+			2'd1: y_rst <= 2'd2;
+			2'd2: begin y_rdata <= y_dout; y_rvalid <= 1'b1; y_rst <= 2'd0; end
+			default: y_rst <= 2'd0;
+		endcase
+	end
+	assign y_rd = (y_rst == 2'd2);
+
+	// sample memory: the toggle pair, two flops each way
+	logic        y_sdr_req, y_sdr_ack;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	logic [1:0]  req_sy = 2'b00, ack_sy = 2'b00;
+	always_ff @(posedge clk)     req_sy <= {req_sy[0], y_sdr_req};
+	always_ff @(posedge clk_ymf) ack_sy <= {ack_sy[0], pcm_ack};
+	assign pcm_req   = req_sy[1];
+	assign y_sdr_ack = ack_sy[1];
+
+	// output
+	logic signed [15:0] y_l, y_r, y_l_d, y_r_d;
+	logic               y_new, o_pulse;
+	logic [31:0]        o_pay;
+	always_ff @(posedge clk_ymf) begin
+		y_l_d <= y_l; y_r_d <= y_r;
+		y_new <= (y_l != y_l_d) || (y_r != y_r_d);
+	end
+	ms32_cdc_mailbox #(.W(32)) u_yout (
+		.clk_s(clk_ymf), .s_pulse(y_new), .s_data({y_l_d, y_r_d}),
+		.clk_d(clk), .d_pulse(o_pulse), .d_data(o_pay)
+	);
+	always_ff @(posedge clk) if (o_pulse) begin audio_l <= o_pay[31:16]; audio_r <= o_pay[15:0]; end
+
+`ifdef MS32_SIM_NO_YMF271
+	// sim/sound_tb under ModelSim: timers and status only (see that file), on
+	// clk_ymf behind the same crossings as the chip
+	ms32_ymf271_timers #(.TICK_INC(441), .TICK_MOD(int'(CLK_HZ_X3) / 300)) u_ymf (
+		.clk(clk_ymf), .reset(y_reset),
+		.wr(y_wr), .wr_addr(y_wpay[11:8]), .din(y_wpay[7:0]), .rd_addr(y_ra), .dout(y_dout)
+	);
+	assign y_sdr_req = 1'b0; assign pcm_addr26 = 26'd0; assign y_l = 16'd0; assign y_r = 16'd0; assign dbg_ymf_overrun = 16'd0;
 `else
 	ssbus_if ss_regs(), ss_par(), ss_st(), ss_fb();
 	assign ss_regs.select = 8'hFF; assign ss_regs.query = 1'b0; assign ss_regs.read = 1'b0; assign ss_regs.write = 1'b0;
@@ -199,15 +279,15 @@ module ms32_sound #(
 	assign ss_fb.select   = 8'hFF; assign ss_fb.query   = 1'b0; assign ss_fb.read   = 1'b0; assign ss_fb.write   = 1'b0;
 	assign ss_fb.data     = 64'd0; assign ss_fb.addr    = 32'd0;
 	ymf271 #(.CLK_HZ_X3(CLK_HZ_X3)) u_ymf (
-		.clk(clk), .ce(ymf_ce), .reset(reset), .pause(1'b0),
+		.clk(clk_ymf), .ce(1'b1), .reset(y_reset), .pause(1'b0),
 		.ssbus_regs(ss_regs), .ssbus_par(ss_par), .ssbus_st(ss_st), .ssbus_fb(ss_fb),
 		// stereo: outputs 0 and 1 left and right; pcm_25mb: the sample
 		// address reaches bit 21, for the 4 MB ROM
 		.stereo(1'b1), .pcm_25mb(1'b1), .ymf_16384(1'b0),
-		.addr(ymf_a), .din(wd), .dout(ymf_q), .wr(ymf_wr), .rd(ymf_rd), .irq(),
-		.sdr_addr(pcm_addr26), .sdr_dout(pcm_data), .sdr_req(pcm_req), .sdr_ack(pcm_ack),
+		.addr(y_wr ? y_wpay[11:8] : y_ra), .din(y_wpay[7:0]), .dout(y_dout), .wr(y_wr), .rd(y_rd), .irq(),
+		.sdr_addr(pcm_addr26), .sdr_dout(pcm_data), .sdr_req(y_sdr_req), .sdr_ack(y_sdr_ack),
 		.ext_wr(), .ext_wd(), .ext_a(), .ext_ovr(1'b0), .ext_ovr_data(8'h00), .mem_dirty(1'b0),
-		.audio_l(audio_l), .audio_r(audio_r), .dbg_overrun(), .dbg_active()
+		.audio_l(y_l), .audio_r(y_r), .dbg_overrun(dbg_ymf_overrun), .dbg_active()
 	);
 `endif
 	assign pcm_addr = pcm_addr26[21:0];
@@ -221,7 +301,7 @@ module ms32_sound #(
 		if (mem_rd) begin
 			if      (is_rom)   di = rom_hold;
 			else if (is_ram)   di = ram_q;
-			else if (is_ymf)   di = ymf_q;
+			else if (is_ymf)   di = ymf_hold;
 			else if (is_latch) di = ~cmd;
 			else               di = 8'h00;
 		end else if (io_rd) di = 8'hFF;
@@ -230,7 +310,7 @@ module ms32_sound #(
 
 	// RAM and I/O: one fixed wait cycle for the registered RAM read
 	logic access_started;
-	wire  access_nonrom = (!mreq_n || !iorq_n) && (!rd_n || !wr_n) && !is_rom_read;
+	wire  access_nonrom = (!mreq_n || !iorq_n) && (!rd_n || !wr_n) && !is_rom_read && !is_ymf_read;
 	always_ff @(posedge clk) access_started <= zreset ? 1'b0 : access_nonrom;
 
 	// ROM: one request per M-cycle, valid stretched to the end of the window
@@ -252,6 +332,7 @@ module ms32_sound #(
 	end
 
 	assign wait_n = is_rom_read   ? rom_done
+	              : is_ymf_read   ? ymf_done
 	              : access_nonrom ? access_started
 	              : 1'b1;
 

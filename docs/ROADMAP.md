@@ -462,6 +462,61 @@ Two further notes, both from LESSONS_LEARNED and both cheap now and expensive la
   builds it out of logic; an 8 KB register file done that way needed 122,886 combinational nodes
   against the device's 83,820.
 
+### Offload candidates
+
+At commit `02fc1b1` the fit used all 553 M10K blocks (README, "Resource usage"). A ROZ fix (README,
+"Status") needs a few: a bigger ROM cache, or line buffers to render more than one line ahead. What
+could give them back, from MAME's `ms32_v.cpp`/`ms32.cpp` and the fitter's RAM summary.
+
+**Done: object RAM in SDRAM** (`78760b1`, `3b53a36`): 495 of 553 blocks, clk_sys +0.570 ns. The CPU's
+object RAM accesses wait on SDRAM port 2; the vblank copy reads it into DDR3 in 24-25 lines. Before
+building, `system_tb` measured each game's busy time per frame (clocks outside its wait-for-vblank
+loop) with a +20-clock wait on every object RAM access: tetrisp, gametngk and p47aces stayed under a
+frame (2 tetrisp frames over at +20, none at +14). After, over 1,200 frames: interrupts taken 1775,
+24347 and 11325 (one fewer for gametngk), worst busy frame 94%, 91% and 38% (92%, 92% and 28%
+before), no frame over.
+
+**Spent on the ROZ cache** (`102bffd`): 2,048 sets of two ways and a vblank warm pass of line 0,
+34 blocks in place of 4 (527 of 553). README, "Status", has the sweep figures.
+
+**Not work RAM.** The same measurement with a +10-clock wait on work RAM put frames over in tetrisp
+(4) and gametngk (3), and +14 put 921 of gametngk's 1,140 over: its ROZ scenes copy the per-line
+table from work RAM to line RAM every frame (2,048 reads, 2,048 writes) and are 86% busy already.
+
+**Store only the bits the video reads.** Each changes what the CPU reads back from the unused bits
+(MAME returns what was written). Before any of these, a MAME write tap over each game's attract
+should show whether a game ever writes non-zero there.
+
+| RAM | MAME reads | now | could be | saves |
+|---|---|---|---|---|
+| Palette, odd words | `m_palram[color*2+1] & 0x00ff` (blue) | 32,768 × 16 | 32,768 × 8 | 32 |
+| ROZ VRAM, odd words | `m_rozram[i*2+1] & 0x000f` (colour) | 16,384 × 16 | 16,384 × 4 | 24 |
+| TX and BG VRAM, odd words | `& 0x000f` (colour) | 4,096 × 16 each | 4,096 × 4 each | 12 |
+
+**Move small RAMs out of M10K.** Every inferred RAM costs at least one block, however small, and a
+RAM wider than 40 bits splits across several. As MLAB or registers these cost logic instead (6,754
+ALMs free; an MLAB stores about 64 bits per ALM).
+
+| RAM | bits | M10K |
+|---|---|---|
+| YMF271: eight 256 × 8 parameter lanes, the 48-slot state, cache, output and feedback memories, the algorithm tables, three ROMs | 39K | 25 |
+| Object copy staging and window | 17K | 7 |
+| ROZ ROM cache | 5K | 4 |
+| Register readback (1,024 × 32) | 33K | 4 |
+
+**Move large RAMs to SDRAM.** 256 KB of the 32 MB was free (the map ended at `0x1FC_0000`). Every
+access then waits on the one SDRAM chip behind the video fetches (port 2, lowest priority), so each
+needs the V70's throughput measured with an SDRAM latency model before it is worth building.
+
+| RAM | bytes | M10K | access |
+|---|---|---|---|
+| Object RAM, live copy | 64 KB | 64 | done, above |
+| Work RAM | 128 KB | 128 | measured too slow, above |
+| NVRAM | 8 KB | 8 | rare CPU access; the HPS save path would read it from SDRAM |
+
+Not candidates: ROZ VRAM tile words, priority RAM and the palette even words (read per pixel), the
+Z80 RAM (16 KB, every Z80 access), and the framework scaler's line buffers (sized for 1080p output).
+
 ## Memory plan
 
 Target: a **32 MB** MiSTer SDRAM module, because that is what most people have. Largest in-scope ROM
@@ -529,7 +584,7 @@ CPI on `tetrisp` boot code with ideal memory is 8.48 against MAME's flat 8, so a
 the core does ~94% of MAME's V70 work per frame. The plan is therefore **`clk_cpu` = 20 MHz
 exact** (960 MHz VCO: /48; `clk_sys` 96 MHz is /10), the original rate, with two levers held in
 reserve and both already measured: 24 MHz (/40) buys the 6% back and is a documented divergence
-for `docs/MAME_DIVERGENCE.md`; pipelining the FP tail the way Model 1 did takes the core's
+for `docs/MAME_KLUDGES.md`; pipelining the FP tail the way Model 1 did takes the core's
 standalone Fmax from 25.1 to ~45 MHz and is the answer if the in-design margin at 20 MHz proves
 thin. What the SDRAM-backed ROM does to the 8.48 is Phase 2's first measurement, and the s32
 instruction cache (`FAST_IFETCH`) is the lever for that one.
@@ -556,7 +611,7 @@ that block; they never replace it, and the notice is not a comment to tidy away.
 PCB here. MAME's output is the accuracy target, which means its acknowledged guesses are inherited
 deliberately: the brightness model, always-on ROZ wrapping, the unimplemented ROZ0 plane, the
 500 µs programmable-timer period, the priority-RAM probe addresses. Each of those goes in
-`docs/MAME_DIVERGENCE.md` when it is implemented, with what MAME does, what the hardware is suspected
+`docs/MAME_KLUDGES.md` when it is implemented, with what MAME does, what the hardware is suspected
 to do, and what would settle it. Seta's file of the same name is the model.
 
 **Transcribe the mixer from MAME literally first, then look for the table.** The priority RAM is
@@ -671,7 +726,7 @@ recognisably correct audio, verified by ear and by a decoded capture.
 
 **Phase 4 — The rest of the game list, and accuracy.**
 Mahjong inputs, ROT270 sets, per-game `.mra` files including every clone, the ROZ wrapping question,
-the second brightness register, the priority-RAM experiments. `docs/MAME_DIVERGENCE.md` is the
+the second brightness register, the priority-RAM experiments. `docs/MAME_KLUDGES.md` is the
 deliverable that says what is still not right and what would settle it.
 
 **Phase 5 — Savestates.** Not before Phase 4. Psikyo's `docs/savestates.md` is the feasibility study
@@ -735,7 +790,7 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 ## Open items
 
 - **No MS32 PCB.** MAME's output is the accuracy target including its acknowledged guesses. Listed
-  under "Design decisions"; tracked in `docs/MAME_DIVERGENCE.md` once there is something to track.
+  under "Design decisions"; tracked in `docs/MAME_KLUDGES.md` once there is something to track.
 - **Whether the vendored CPU reaches real-board throughput.** Phase 0 answers it. Model 1 ships at
   ~70% of its board's per-frame work and says so; MS32 has to decide what it will accept, and the
   `.mra`/release notes have to say it.
@@ -783,7 +838,8 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
 
 Phase 0, Phase 1 and most of Phase 2 are done. On the DE10-nano: `tetrisp` is playable; `p47aces`,
 `gametngk`, `hayaosi2`, `tp2m32` and `suchie2` run their attract modes; the mahjong sets read a
-keyboard as their key matrix (A, B and N checked in `suchie2`'s service menu); ROMs load through DDR3 (`ms32_rom_loader`);
+keyboard as their key matrix (checked by hand on the board by the project owner), and keyboard 5 and 6 insert coins on every
+set; ROMs load through DDR3 (`ms32_rom_loader`);
 NVRAM is saved to `config/nvram`; every in-scope set has a generated `.mra` with DIP menus, loading
 from split or merged zips; HDMI rotation and Flip 180 are in the OSD. Phase 3 is in, released as
 `Arcade-JalecoMS32_20260913.rbf`: the Z80 (T80) with RAM, banks and latches, whose writes match
@@ -803,8 +859,6 @@ aside), and the YMF271 with its sample ROM in SDRAM. What follows:
    MAME's) were both right. RAM blocks are at 553 of 553.
 3. **The games' Flip Screen DIP** (sysctrl control bit 1). MAME flips the tilemaps and not the
    sprites, so its behaviour would draw a broken picture; decide what to follow and record it in
-   `docs/MAME_DIVERGENCE.md` (Phase 4).
-4. **Mahjong coin keys.** On the mahjong sets keyboard `5` should insert coin 1 and `6` coin 2
-   (MAME's defaults), beside the key matrix; today coins come only from the joystick.
-5. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
+   `docs/MAME_KLUDGES.md` (Phase 4).
+4. The sprite frame buffer's sprite-word writes stay single-beat; if the board's counters show
    `wr_stall_cycles` growing, row bursts are the next transport change.

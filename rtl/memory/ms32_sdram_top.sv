@@ -15,7 +15,8 @@
 //   roztiles  0x068_0000   4 MB     16x16x8 tiles
 //   sprite    0x0A8_0000   17 MB    256x256 pages, ROM_LOAD32_WORD x2 interleaved by the .mra
 //   audiocpu  0x1B8_0000   256 KB   Z80 program
-//   ymf       0x1BC_0000   4 MB     YMF271 sample ROM (ends 0x1FC_0000)
+//   ymf       0x1BC_0000   4 MB     YMF271 sample ROM
+//   objram    0x1FC_0000   64 KB    object RAM, the live copy (ms32_objram); not downloaded
 //
 // The sprite region is 17 MB for bbbxing, the one set whose sprite ROM is
 // larger than 16 MB. Every other set masks sprite addresses to 24 bits, which
@@ -24,8 +25,12 @@
 //
 // PORTS -- sdram.sv's three ports are FIXED PRIORITY 0 > 1 > 2 on one chip:
 //   port 0   TX, BG and ROZ tile fetch (arbiter of 3): the hardest deadline, one line of lead
-//   port 1   sprite graphics: a frame of lead
-//   port 2   CPU instruction granules, CPU data words, Z80 bytes, YMF271 sample granules, and the download
+//   port 1   CPU instruction granules, Z80 bytes, YMF271 sample granules, object RAM granules (four
+//            clients: a power of two keeps the round-robin pick cheap; a fifth failed timing); the
+//            download's writes, and object RAM writes through the same path
+//   port 2   sprite graphics: a frame of lead, so the one client that can wait. With sprites on
+//            port 1 and these on port 2, P-47 Aces' YMF271 missed ~5% of its 44.1 kHz ticks on
+//            the board (fetches waiting up to 651 clocks behind sprite reads) and the game slowed.
 //
 // TILE DECRYPTION happens on the way in (ms32_jalcrpt_pkg.sv, generated and
 // checked by scripts/gen_jalcrpt.py): a source byte at region offset j is
@@ -74,17 +79,23 @@ module ms32_sdram_top (
 
 	// V70 instruction fetch: one 8-byte granule, region-local
 	input  wire         if_req,  input wire [20:3] if_addr,  output wire if_valid,  output wire [63:0] if_data,
-	// V70 data reads from ROM: 32-bit words, region-local byte address
-	input  wire         cpu_req, input wire [20:0] cpu_addr, output wire cpu_valid, output wire [31:0] cpu_data,
 	// Z80 program: bytes, region-local
 	input  wire         z80_req, input wire [17:0] z80_addr, output wire z80_valid, output wire  [7:0] z80_data,
 	// YMF271 sample ROM: 8-byte granules, region-local, on the chip's toggle
 	// handshake (ymf271_synth: req toggles, ack follows it when data is up)
 	input  wire         ymf_req, input wire [21:0] ymf_addr, output reg  ymf_ack,   output reg  [63:0] ymf_data,
+	// object RAM (ms32_objram): granule reads held until obj_rvalid, with a low
+	// clock between requests; writes (one or both lanes of a word) held until
+	// obj_wbusy is seen, complete when it falls
+	input  wire         obj_rreq, input wire [12:0] obj_raddr, output wire obj_rvalid, output wire [63:0] obj_rdata,
+	input  wire         obj_wreq, input wire [15:0] obj_waddr, input wire  obj_we16,  input  wire [15:0] obj_wdata,
+	output wire         obj_wbusy,
 
 	// for the ISSP probe
 	output wire         dbg_dl_req,
-	output wire         dbg_dl_busy
+	output wire         dbg_dl_busy,
+	// the longest wait, clocks, from request to data: YMF271 samples, V70 instruction fetch
+	output logic [15:0] dbg_ymf_wait_max, dbg_if_wait_max
 );
 
 	import ms32_jalcrpt_pkg::*;
@@ -96,6 +107,7 @@ module ms32_sdram_top (
 	localparam logic [25:0] BASE_SPRITE   = 26'h0A8_0000;
 	localparam logic [25:0] BASE_AUDIOCPU = 26'h1B8_0000;
 	localparam logic [25:0] BASE_YMF      = 26'h1BC_0000;
+	localparam logic [25:0] BASE_OBJRAM   = 26'h1FC_0000;
 	localparam logic [23:0] MASK_TX  = 24'h07_FFFF;
 	localparam logic [23:0] MASK_BG  = 24'h3F_FFFF;
 	localparam logic [23:0] MASK_ROZ = 24'h3F_FFFF;
@@ -214,26 +226,21 @@ module ms32_sdram_top (
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);
 
-	// ---------------------------------------------------- port 1: sprites
+	// ---------------------------------------------------- port 2: sprites
 	sdram_arbiter #(.N(1)) u_arb1 (
 		.clk(clk), .reset(reset),
-		.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
-		.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
-		.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
+		.phy_req(phy_req[2]), .phy_we(phy_we[2]), .phy_we16(phy_we16[2]),
+		.phy_addr(phy_addr[2]), .phy_wdata(phy_wdata[2]),
+		.phy_busy(phy_busy[2]), .phy_valid(phy_valid[2]), .phy_rdata(phy_rdata[2]),
 		.c_req(spr_l), .c_addr(BASE_SPRITE + {1'd0, spr_addr[24:0] & mask_spr}),
 		.c_valid(spr_valid), .c_rdata(spr_data),
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);
 
-	// ------------------------------------------- port 2: CPUs and the download
-	wire        cpu_g_req, cpu_g_valid, z80_g_req, z80_g_valid;
-	wire [25:0] cpu_g_addr, z80_g_addr;
-	wire [63:0] cpu_g_data, z80_g_data;
-	sdram_narrow_bridge #(.WORD_BYTES(4)) u_cpu_bridge (
-		.clk(clk), .reset(reset), .inval(ioctl_download),
-		.req(cpu_req), .addr({5'd0, cpu_addr}), .valid(cpu_valid), .data(cpu_data),
-		.g_req(cpu_g_req), .g_addr(cpu_g_addr), .g_valid(cpu_g_valid), .g_data(cpu_g_data)
-	);
+	// ------------------------------------------- port 1: CPUs and the download
+	wire        z80_g_req, z80_g_valid;
+	wire [25:0] z80_g_addr;
+	wire [63:0] z80_g_data;
 	sdram_narrow_bridge #(.WORD_BYTES(1)) u_z80_bridge (
 		.clk(clk), .reset(reset), .inval(ioctl_download),
 		.req(z80_req), .addr({8'd0, z80_addr}), .valid(z80_valid), .data(z80_data),
@@ -253,22 +260,45 @@ module ms32_sdram_top (
 		end else if (ymf_req != ymf_ack) ymf_l <= 1'b1;
 	end
 
+	logic [15:0] ymf_wait, if_wait;
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			ymf_wait <= '0; if_wait <= '0; dbg_ymf_wait_max <= '0; dbg_if_wait_max <= '0;
+		end else begin
+			ymf_wait <= ymf_l ? ((ymf_wait == 16'hFFFF) ? ymf_wait : ymf_wait + 16'd1) : 16'd0;
+			if_wait  <= if_l  ? ((if_wait  == 16'hFFFF) ? if_wait  : if_wait  + 16'd1) : 16'd0;
+			if (ymf_wait > dbg_ymf_wait_max) dbg_ymf_wait_max <= ymf_wait;
+			if (if_wait  > dbg_if_wait_max)  dbg_if_wait_max  <= if_wait;
+		end
+	end
+
 	assign if_valid    = arb2_valid[0];  assign if_data    = arb2_rdata;
-	assign cpu_g_valid = arb2_valid[1];  assign cpu_g_data = arb2_rdata;
+	assign obj_rvalid  = arb2_valid[1];  assign obj_rdata  = arb2_rdata;
 	assign z80_g_valid = arb2_valid[2];  assign z80_g_data = arb2_rdata;
 	assign ymf_g_valid = arb2_valid[3];
+
+	// Object RAM writes share the download's absolute-priority write path.
+	// The download (ioctl index 0) only runs with the core in reset, when
+	// ms32_objram is too, so the two never wait on each other; a download
+	// write still wins and its busy is not passed on.
+	wire        rom_dl   = ioctl_dl_q && (ioctl_index_q == 16'd0);
+	wire        w_req    = dl_req | (obj_wreq & ~rom_dl);
+	wire [25:0] w_addr   = dl_req ? dl_addr  : BASE_OBJRAM + {10'd0, obj_waddr};
+	wire [15:0] w_data   = dl_req ? dl_data  : obj_wdata;
+	wire        w_we16   = dl_req ? dl_we16  : obj_we16;
+	assign obj_wbusy = dl_busy & ~rom_dl;
 	sdram_arbiter #(.N(4)) u_arb2 (
 		.clk(clk), .reset(reset),
-		.phy_req(phy_req[2]), .phy_we(phy_we[2]), .phy_we16(phy_we16[2]),
-		.phy_addr(phy_addr[2]), .phy_wdata(phy_wdata[2]),
-		.phy_busy(phy_busy[2]), .phy_valid(phy_valid[2]), .phy_rdata(phy_rdata[2]),
-		.c_req({ymf_l, z80_g_req, cpu_g_req, if_l}),
+		.phy_req(phy_req[1]), .phy_we(phy_we[1]), .phy_we16(phy_we16[1]),
+		.phy_addr(phy_addr[1]), .phy_wdata(phy_wdata[1]),
+		.phy_busy(phy_busy[1]), .phy_valid(phy_valid[1]), .phy_rdata(phy_rdata[1]),
+		.c_req({ymf_l, z80_g_req, obj_rreq, if_l}),
 		.c_addr({BASE_YMF + {4'd0, ymf_addr[21:3], 3'b000},
 		         BASE_AUDIOCPU + z80_g_addr,
-		         BASE_MAINCPU  + cpu_g_addr,
+		         BASE_OBJRAM + {10'd0, obj_raddr, 3'b000},
 		         BASE_MAINCPU  + {5'd0, if_addr, 3'd0}}),
 		.c_valid(arb2_valid), .c_rdata(arb2_rdata),
-		.dl_req(dl_req), .dl_addr(dl_addr), .dl_data(dl_data), .dl_we16(dl_we16), .dl_busy(dl_busy)
+		.dl_req(w_req), .dl_addr(w_addr), .dl_data(w_data), .dl_we16(w_we16), .dl_busy(dl_busy)
 	);
 
 endmodule

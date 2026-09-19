@@ -44,6 +44,10 @@ def main():
         obj.mkdir(parents=True, exist_ok=True)
         cmd = [str(MSYS / "mingw64" / "bin" / "verilator_bin.exe"),"--binary", "--timing", "-j", "4",   # -j caps the g++ fan-out (run_v60_verilator.sh)
                "-Wno-fatal", "-Wno-WIDTHTRUNC", "-Wno-WIDTHEXPAND", "-Wno-UNUSEDSIGNAL", "-Wno-PINCONNECTEMPTY",
+               # -O2, not Verilator's -Os: MSYS2's gcc 16.2 in C++20 mode at -Os calls
+               # std::string's move constructor out of line, and its libstdc++ does not
+               # export it (undefined reference at link; -O2 inlines it)
+               "-MAKEFLAGS", "OPT_FAST=-O2 OPT_SLOW=-O2 OPT_GLOBAL=-O2",
                "--top-module", top, "--Mdir", str(obj), "-o", f"V{top}.exe"] + srcs
         print("verilator:", bench, flush=True)
         r = subprocess.run(cmd, cwd=REPO, env=env)

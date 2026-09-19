@@ -31,6 +31,9 @@ module tb_sound #(
 
 reg clk = 0;
 always #5 clk = ~clk;
+// the YMF271's own clock, 56.47 MHz against clk's 96: 17 ns against 10
+reg clk_ymf = 0;
+always #8.5 clk_ymf = ~clk_ymf;
 reg reset = 1;
 longint clocks = 0;
 
@@ -52,8 +55,8 @@ wire [21:0] pcm_addr;
 reg  [63:0] pcm_data;
 wire signed [15:0] audio_l, audio_r;
 
-ms32_sound #(.CEN_DIV(CEN_DIV), .CLK_HZ_X3(29'(24000000 * CEN_DIV))) dut (
-	.clk(clk), .reset(reset),
+ms32_sound #(.CEN_DIV(CEN_DIV), .CLK_HZ_X3(29'(24000000 * CEN_DIV / 17 * 10))) dut (   // divide first: 24e6 * 12 * 10 overflows 32 bits
+	.clk(clk), .clk_ymf(clk_ymf), .reset(reset),
 	.snd_reset(snd_reset), .cmd_we(cmd_we), .cmd_data(cmd_data),
 	.to_main_we(to_main_we), .to_main_data(to_main_data),
 	.rom_req(rom_req), .rom_addr(rom_addr), .rom_valid(rom_valid), .rom_data(rom_data),

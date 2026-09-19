@@ -59,6 +59,31 @@ foreach inst $insts {
         puts [format "ROZ cache hits            : %d" [bits_to_int $p 84 99]]
         puts [format "last download addr (low)  : %04X" [bits_to_int $p 100 115]]
         puts [format "ROZ non-zero pens written : %d" [bits_to_int $p 116 131]]
+    } elseif {$iid eq "V"} {
+        set fl [bits_to_int $p 0 6]
+        set names {TX BG ROZ sprites fb-read priority-mask rotation}
+        set on {}
+        for {set b 0} {$b < 7} {incr b} { if {($fl >> $b) & 1} { lappend on [lindex $names $b] } }
+        puts [format "overrun flags set         : %s" [expr {[llength $on] ? [join $on {, }] : "none"}]]
+        puts [format "sprite frames overrun     : %d" [bits_to_int $p 7 22]]
+        puts [format "frame-buffer lines late   : %d" [bits_to_int $p 23 38]]
+        puts [format "ROZ lines late            : %d" [bits_to_int $p 39 54]]
+        set ms [bits_to_int $p 55 78]
+        puts [format "longest sprite frame      : %d clocks (%.0f%% of a frame)" $ms [expr {100.0 * $ms / (6144 * 263)}]]
+        set mc [bits_to_int $p 79 102]
+        puts [format "latest copy finish        : %d clocks after vblank (%d lines)" $mc [expr {$mc / 6144}]]
+        puts [format "frames                    : %d" [bits_to_int $p 103 118]]
+        puts [format "frame of last late ROZ    : %d" [bits_to_int $p 119 134]]
+        puts [format "core resets seen          : %d" [bits_to_int $p 135 150]]
+        puts [format "last reset length         : %d clocks" [bits_to_int $p 151 174]]
+        puts [format "OSD reset rises           : %d" [bits_to_int $p 175 190]]
+        puts [format "V70 held (core_run falls) : %d" [bits_to_int $p 191 206]]
+        puts [format "DIP reads (32-bit)        : %d" [bits_to_int $p 207 222]]
+        puts [format "DIP reads not the switches: %d" [bits_to_int $p 223 238]]
+        puts [format "last such value           : %08X" [bits_to_int $p 239 270]]
+        puts [format "YMF271 passes overrun     : %d" [bits_to_int $p 271 286]]
+        puts [format "YMF271 fetch wait, max    : %d clocks" [bits_to_int $p 287 302]]
+        puts [format "V70 ifetch wait, max      : %d clocks" [bits_to_int $p 303 318]]
     } else {
         puts "raw: $p"
     }

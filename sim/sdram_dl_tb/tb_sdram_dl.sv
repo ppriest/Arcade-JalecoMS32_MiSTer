@@ -48,9 +48,9 @@ ms32_sdram_top u_sdram (
 	.roz_req(1'b0), .roz_addr(24'd0), .roz_valid(), .roz_data(),
 	.spr_req(1'b0), .spr_addr(28'd0), .spr_valid(), .spr_data(),
 	.if_req(1'b0), .if_addr(18'd0), .if_valid(), .if_data(),
-	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
 	.z80_req(1'b0), .z80_addr(18'd0), .z80_valid(), .z80_data(),
-	.ymf_req(1'b0), .ymf_addr(22'd0), .ymf_ack(), .ymf_data()
+	.ymf_req(1'b0), .ymf_addr(22'd0), .ymf_ack(), .ymf_data(),
+	.obj_rreq(1'b0), .obj_raddr(13'd0), .obj_rvalid(), .obj_rdata(), .obj_wreq(1'b0), .obj_waddr(16'd0), .obj_we16(1'b0), .obj_wdata(16'd0), .obj_wbusy()
 );
 sdram_chip_model_wide u_chip (
 	.clk(clk), .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA),

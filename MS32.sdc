@@ -43,16 +43,9 @@ if {[get_collection_size $t80] > 0} {
     post_message -type critical_warning "MS32.sdc: no T80se registers matched -- sound CPU multicycle NOT applied"
 }
 
-# The YMF271 (rtl/sound/ymf271, the SeibuSPI engine, closed there at 57 MHz)
-# runs on ms32_sound's clock enable, high every other clk_sys clock; every one
-# of its clocked blocks is gated by it ([MS32] ce in both files). Paths from
-# one of its registers or RAMs to another get two clocks. Paths in and out keep
-# one: ms32_sound holds a write or read strobe until a clock with the enable,
-# and the SDRAM adapter samples the toggle handshake every clock.
-set ymf [get_registers {*|ms32_sound:u_sound|ymf271:u_ymf|*}]
-if {[get_collection_size $ymf] > 0} {
-    set_multicycle_path -setup -end 2 -from $ymf -to $ymf
-    set_multicycle_path -hold  -end 1 -from $ymf -to $ymf
-} else {
-    post_message -type critical_warning "MS32.sdc: no ymf271 registers matched -- YMF271 multicycle NOT applied"
-}
+# The YMF271 (rtl/sound/ymf271, the SeibuSPI engine) runs on its own clock,
+# the PLL's general[3] at 960 MHz / 17 = 56.47 MHz (rtl/sound/ms32_sound.sv):
+# single-cycle, no multicycle. It crosses to clk_sys only through ms32_cdc's
+# synchronisers and the sample memory's two-flop toggle pair.
+set clk_ymf_pll [get_clocks {*pll|pll_inst|altera_pll_i|general[3].gpll~PLL_OUTPUT_COUNTER|divclk}]
+set_clock_groups -asynchronous -group $clk_ymf_pll -group $clk_sys_pll -group $clk_cpu_pll

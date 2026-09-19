@@ -28,9 +28,10 @@
 // so a change the game makes takes effect at the next frame -- the same
 // granularity as MAME, which reads them once per screen_update.
 //
-// Pipeline: resolve (1) -> palette read (2) -> brightness (3) -> rgb.
-// Inputs describe the dot at hcnt and are stable for the dot period; rgb
-// is valid four clocks after hcnt changes.
+// Pipeline: resolve (1) -> palette read (2) -> palette word register (2b) ->
+// brightness (3) -> shadow (4). Inputs describe the dot at hcnt and are stable
+// for the dot period; rgb is valid five clocks after hcnt changes, inside the
+// shortest dot (12 clocks at 8 MHz), where ms32_video samples it.
 module ms32_mixer (
 	input  logic        clk,
 	input  logic        reset,
@@ -180,6 +181,19 @@ module ms32_mixer (
 		s2_black  <= s1_black;
 	end
 
+	// ------------------------------------ stage 2b: the palette words, registered
+	// The palette RAM's output straight into the brightness products was the
+	// worst clk_sys path in three fitted builds (-0.263 ns at seed 3, 0cf1b86).
+	logic [15:0] pw0, pw1;
+	logic        s2b_shadow, s2b_dim, s2b_black;
+	always_ff @(posedge clk) begin
+		pw0        <= pal_w0;
+		pw1        <= pal_w1;
+		s2b_shadow <= s2_shadow;
+		s2b_dim    <= s2_dim;
+		s2b_black  <= s2_black;
+	end
+
 	// ------------------------------------------------- stage 3: brightness
 	// Three 8x9 products at pixel rate: the one place in the video path that
 	// keeps a multiplier (WORKFLOW "No multiplies, no divides" names this
@@ -190,16 +204,16 @@ module ms32_mixer (
 	wire [8:0] brt_r = 9'h100 - {1'b0, brt0[15:8]};
 	wire [8:0] brt_g = 9'h100 - {1'b0, brt0[7:0]};
 	wire [8:0] brt_b = 9'h100 - {1'b0, brt1[7:0]};
-	wire [16:0] pr = {9'd0, pal_w0[15:8]} * brt_r;
-	wire [16:0] pg = {9'd0, pal_w0[7:0]}  * brt_g;
-	wire [16:0] pb = {9'd0, pal_w1[7:0]}  * brt_b;
+	wire [16:0] pr = {9'd0, pw0[15:8]} * brt_r;
+	wire [16:0] pg = {9'd0, pw0[7:0]}  * brt_g;
+	wire [16:0] pb = {9'd0, pw1[7:0]}  * brt_b;
 	logic [7:0] r3, g3, b3;
 	logic       s3_shadow;
 	always_ff @(posedge clk) begin
-		r3 <= s2_black ? 8'd0 : s2_dim ? pr[15:8] : pal_w0[15:8];
-		g3 <= s2_black ? 8'd0 : s2_dim ? pg[15:8] : pal_w0[7:0];
-		b3 <= s2_black ? 8'd0 : s2_dim ? pb[15:8] : pal_w1[7:0];
-		s3_shadow <= s2_shadow;
+		r3 <= s2b_black ? 8'd0 : s2b_dim ? pr[15:8] : pw0[15:8];
+		g3 <= s2b_black ? 8'd0 : s2b_dim ? pg[15:8] : pw0[7:0];
+		b3 <= s2b_black ? 8'd0 : s2b_dim ? pb[15:8] : pw1[7:0];
+		s3_shadow <= s2b_shadow;
 	end
 
 	// stage 4: shadow (alpha_blend_r32(tile, black, 128) = halve)

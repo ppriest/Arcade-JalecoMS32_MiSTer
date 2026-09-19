@@ -37,9 +37,11 @@ assign HDMI_FREEZE = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
-// AUDIO_L/AUDIO_R come from the YMF271 (SOUND below)
+// AUDIO_L/AUDIO_R come from the YMF271 (SOUND below). The mainboard's own
+// output is mono (ms32.cpp header), so the OSD's Stereo Mix defaults to it:
+// status 0 Mono (AUDIO_MIX 3), 1 None (0), 2 25% (1), 3 50% (2).
 assign AUDIO_S = 1;
-assign AUDIO_MIX = 0;
+assign AUDIO_MIX = status[67:66] - 2'd1;
 
 assign LED_DISK = 0;
 assign LED_POWER = 0;
@@ -67,9 +69,9 @@ assign FB_FORCE_BLANK = 0;
 
 `include "build_id.v"
 
-// The Debug page is hidden in the release revision. Every one of its lines
-// carries an H1 prefix, so status_menumask bit 1 hides the whole page; the
-// bits still work if a .CFG sets them, only the MENU goes away. DEBUG_ISSP is
+// The Debug page and Load capture are hidden in the release revision. Each of
+// their lines carries an H1 prefix, so status_menumask bit 1 hides them all;
+// the bits still work if a .CFG sets them, only the MENU goes away. DEBUG_ISSP is
 // defined by MS32_stp.qsf and not by MS32.qsf (docs/WORKFLOW.md §1, §3).
 `ifdef DEBUG_ISSP
 localparam DEBUG_MENU_HIDE = 1'b0;
@@ -84,9 +86,16 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[64:63],Rotation,Auto,Off,CW,CCW;",
 	"O[65],Flip 180,Off,On;",
+	"O[67:66],Stereo Mix,Mono,None,25%,50%;",
 	"-;",
-	"F2,BIN,Load capture;",
+	"O[94],CRT adjust,Off,On;",
+	"H3O[99:95],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H3O[106:100],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H3O[112:107],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"-;",
+	// capture playback is a development tool: in the menu of the stp build only
+	"H1F2,BIN,Load capture;",
+	"H1-;",
 	"DIP;",
 	"-;",
 	// Debug page. The all-zero configuration must stay the correct one, so
@@ -98,10 +107,12 @@ localparam CONF_STR = {
 	"H1P1O[83],ROZ layer,On,Off;",
 	"H1P1O[84],Sprites,On,Off;",
 	"-;",
-	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Start,Coin,Pause,Service,Test;",
-	"jn,A,B,X,Y,R,Start,Select,L,,;",
+	// Reset ahead of the joystick lines, as every other core here has it: after
+	// them the OSD entry was shown but status[0] never rose (ISSP probe V)
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
+	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Start,Coin,Pause,Service,Test;",
+	"jn,A,B,X,Y,R,Start,Select,L;",
 	"v,0;", // [optional] config version 0-99.
 	        // If CONF_STR options are changed in incompatible way, then change version number too,
 	        // so all options will get default values on first start.
@@ -150,7 +161,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({14'd0, debug_menu_hide, 1'b0}),  // H1: the Debug page
+	.status_menumask({12'd0, ~status[94], 1'b0, debug_menu_hide, 1'b0}),  // H1: the Debug page, H3: CRT adjust's settings
 
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
@@ -176,8 +187,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 // ROADMAP "Clock plan": clk_sys 96 MHz for video, memory and sound; clk_cpu
 // 20 MHz for the V70 (Phase 2); SDRAM_CLK is clk_sys shifted 180 degrees.
-// One PLL, VCO 960 MHz.
-wire clk_sys, clk_cpu, clk_sdram_shifted, pll_locked;
+// One PLL, VCO 960 MHz; outclk_3, 960/17 = 56.47 MHz, is the YMF271's (ms32_sound).
+wire clk_sys, clk_cpu, clk_sdram_shifted, clk_ymf, pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
@@ -185,6 +196,7 @@ pll pll
 	.outclk_0(clk_sys),
 	.outclk_1(clk_cpu),
 	.outclk_2(clk_sdram_shifted),
+	.outclk_3(clk_ymf),
 	.locked(pll_locked)
 );
 assign SDRAM_CLK = clk_sdram_shifted;
@@ -217,12 +229,13 @@ function automatic [7:0] player(input [31:0] j);
 	player = ~{j[7], j[6], j[5], j[4], j[0], j[1], j[2], j[3]};   // B4 B3 B2 B1 right left down up
 endfunction
 wire mahjong = mod_byte[5];
+reg  key_coin1 = 1'b0, key_coin2 = 1'b0;   // keyboard 5 and 6, MAME's coin keys, on every set (decoded below)
 wire [31:0] inputs = {8'hFF,
                       ~joystick_1[8], ~joystick_0[8],                    // 23,22 button 5
                       ~joystick_1[9] | mahjong, ~joystick_0[9] | mahjong, // 21,20 start (in the key matrix on mahjong sets)
                       ~(joystick_0[13] | joystick_1[13]),                // 19 test
                       ~(joystick_0[12] | joystick_1[12]),                // 18 service
-                      ~joystick_1[10], ~joystick_0[10],                  // 17,16 coin
+                      ~(joystick_1[10] | key_coin2), ~(joystick_0[10] | key_coin1), // 17,16 coin (joystick, or keyboard 6 / 5)
                       player(joystick_1) | {8{mahjong}}, player(joystick_0)};   // 15:8 unused on mahjong sets
 
 // Mahjong panel (ms32.cpp ms32_mahjong, mahjong.cpp mahjong_matrix_1p) from a
@@ -241,6 +254,7 @@ always @(posedge clk_sys) begin
 		8'h3A: mjk[12] <= ps2_key[9];  8'h31: mjk[13] <= ps2_key[9];
 		8'h14: mjk[14] <= ps2_key[9];  8'h11: mjk[15] <= ps2_key[9];  8'h29: mjk[16] <= ps2_key[9];
 		8'h12: mjk[17] <= ps2_key[9];  8'h1A: mjk[18] <= ps2_key[9];  8'h16: mjk[19] <= ps2_key[9];
+		8'h2E: key_coin1 <= ps2_key[9];  8'h36: key_coin2 <= ps2_key[9];
 		default: ;
 	endcase
 end
@@ -281,6 +295,11 @@ wire [63:0] prg_data, tx_data, bg_data, roz_data, spr_data;
 wire        sd_wait;
 assign ioctl_wait = sd_wait | cap_wait;
 wire        dbg_dl_req, dbg_dl_busy, dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz;
+wire        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_copy_done, core_vblank_ev;
+wire [23:0] dbg_spr_cycles;
+wire [15:0] dbg_dsw_reads, dbg_dsw_bad;
+wire [31:0] dbg_dsw_last_bad;
+wire [15:0] dbg_ymf_wait_max, dbg_if_wait_max, dbg_ymf_overrun;
 
 // FAST ROM LOAD. The .mra's <rom index="0" address="0x30000000"> makes the HPS
 // write the image straight into DDR3: the download then has no ioctl_wr at
@@ -321,6 +340,11 @@ wire        sd_wr    = ldr_active ? l_wr   : ioctl_wr;
 wire [26:0] sd_addr  = ldr_active ? l_addr : ioctl_addr;
 wire  [7:0] sd_dout  = ldr_active ? l_dout : ioctl_dout;
 
+wire        obj_rreq, obj_rvalid, obj_wreq, obj_we16, obj_wbusy;
+wire [12:0] obj_raddr;
+wire [15:0] obj_waddr, obj_wdata;
+wire [63:0] obj_rdata;
+
 // reset & ~sd_dl: MiSTer holds RESET for the whole download, and a memory
 // path gated by it never sees a byte (seta_sdram_top's header).
 ms32_sdram_top u_sdram (
@@ -335,10 +359,11 @@ ms32_sdram_top u_sdram (
 	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
 	.spr_req(spr_req), .spr_addr(spr_addr), .spr_valid(spr_valid), .spr_data(spr_data),
 	.if_req(prg_req), .if_addr(prg_addr), .if_valid(prg_valid), .if_data(prg_data),
-	.cpu_req(1'b0), .cpu_addr(21'd0), .cpu_valid(), .cpu_data(),
 	.z80_req(z80_req), .z80_addr(z80_addr), .z80_valid(z80_valid), .z80_data(z80_data),
 	.ymf_req(pcm_req), .ymf_addr(pcm_addr), .ymf_ack(pcm_ack), .ymf_data(pcm_data),
-	.dbg_dl_req(dbg_dl_req), .dbg_dl_busy(dbg_dl_busy)
+	.obj_rreq(obj_rreq), .obj_raddr(obj_raddr), .obj_rvalid(obj_rvalid), .obj_rdata(obj_rdata),
+	.obj_wreq(obj_wreq), .obj_waddr(obj_waddr), .obj_we16(obj_we16), .obj_wdata(obj_wdata), .obj_wbusy(obj_wbusy),
+	.dbg_dl_req(dbg_dl_req), .dbg_dl_busy(dbg_dl_busy), .dbg_ymf_wait_max(dbg_ymf_wait_max), .dbg_if_wait_max(dbg_if_wait_max)
 );
 
 ///////////////////////   VIDEO   /////////////////////////////////
@@ -393,12 +418,23 @@ ms32_rom_loader u_ldr (
 // the bus side out of reset while a capture or NVRAM loads
 // (ms32_capture_loader), and the fast load holds all of it.
 wire core_run = ~reset & ~mod_byte[7] & ~ldr_active & (rom_loaded | ~dl0_seen);
+
+// Pause: the J1 list's Pause (joystick bit 11) toggles it, from either
+// joystick; a reset clears it. It suspends the main CPU only: the video keeps
+// showing the frame and the sound board keeps running.
+wire pause_btn = joystick_0[11] | joystick_1[11];
+reg  pause_btn_d = 1'b0, pause_toggle = 1'b0;
+always @(posedge clk_sys) begin
+	pause_btn_d <= pause_btn;
+	if (reset)                         pause_toggle <= 1'b0;
+	else if (pause_btn & ~pause_btn_d) pause_toggle <= ~pause_toggle;
+end
 wire       snd_reset, snd_cmd_we, snd_tomain_we;
 wire [7:0] snd_cmd_data, snd_tomain_data;
 
 ms32_core u_core (
 	.clk_sys(clk_sys), .clk_cpu(clk_cpu), .sys_reset(sys_reset | ldr_active),
-	.cpu_run(core_run), .invert_lines(mod_byte[2]),
+	.cpu_run(core_run), .pause(pause_toggle), .invert_lines(mod_byte[2]),
 	.inputs(inputs), .dsw(dsw), .mahjong(mahjong), .mj_keys(mj_keys),
 	.nv_addr(ioctl_addr[12:0]), .nv_rdata(nv_rdata), .nv_written(nv_written),
 	.snd_reset(snd_reset), .snd_cmd_we(snd_cmd_we), .snd_cmd_data(snd_cmd_data),
@@ -409,13 +445,17 @@ ms32_core u_core (
 	.bg_req(bg_req),   .bg_addr(bg_addr),   .bg_valid(bg_valid),   .bg_data(bg_data),
 	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
 	.spr_req(spr_req), .spr_addr(spr_addr), .spr_valid(spr_valid), .spr_data(spr_data),
+	.obj_rreq(obj_rreq), .obj_raddr(obj_raddr), .obj_rvalid(obj_rvalid), .obj_rdata(obj_rdata),
+	.obj_wreq(obj_wreq), .obj_waddr(obj_waddr), .obj_we16(obj_we16), .obj_wdata(obj_wdata), .obj_wbusy(obj_wbusy),
 	.DDRAM_BUSY(c_busy | ldr_active), .DDRAM_BURSTCNT(k_burstcnt), .DDRAM_ADDR(k_addr), .DDRAM_DOUT(c_dout),
 	.DDRAM_DOUT_READY(c_dout_ready & ~ldr_active), .DDRAM_RD(k_rd), .DDRAM_DIN(k_din), .DDRAM_BE(k_be), .DDRAM_WE(k_we),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
-	.vblank_ev(),
+	.vblank_ev(core_vblank_ev),
 	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
-	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz), .dbg_pc()
+	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
+	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles),
+	.dbg_dsw_reads(dbg_dsw_reads), .dbg_dsw_bad(dbg_dsw_bad), .dbg_dsw_last_bad(dbg_dsw_last_bad), .dbg_pc()
 );
 
 ///////////////////////   SOUND   /////////////////////////////////
@@ -426,12 +466,12 @@ wire signed [15:0] snd_l, snd_r;
 assign AUDIO_L = snd_l;
 assign AUDIO_R = snd_r;
 ms32_sound u_sound (
-	.clk(clk_sys), .reset(~core_run),
+	.clk(clk_sys), .clk_ymf(clk_ymf), .reset(~core_run),
 	.snd_reset(snd_reset), .cmd_we(snd_cmd_we), .cmd_data(snd_cmd_data),
 	.to_main_we(snd_tomain_we), .to_main_data(snd_tomain_data),
 	.rom_req(z80_req), .rom_addr(z80_addr), .rom_valid(z80_valid), .rom_data(z80_data),
 	.pcm_req(pcm_req), .pcm_addr(pcm_addr), .pcm_ack(pcm_ack), .pcm_data(pcm_data),
-	.audio_l(snd_l), .audio_r(snd_r)
+	.audio_l(snd_l), .audio_r(snd_r), .dbg_ymf_overrun(dbg_ymf_overrun)
 );
 
 `ifdef DEBUG_ISSP
@@ -445,16 +485,42 @@ issp_probe #(.INSTANCE_ID("M")) u_issp (
 	.ioctl_wait(ioctl_wait), .ioctl_download(ioctl_download), .pll_locked(pll_locked),
 	.roz_fill(dbg_roz_fill), .roz_hit(dbg_roz_hit), .roz_pen_nz(dbg_roz_pen_nz)
 );
+// the video engines' time: which have overrun, how often, and the margins
+issp_video_probe #(.INSTANCE_ID("V")) u_issp_v (
+	.clk(clk_sys),
+	.flags({rot_overflow, bad_pm, fb_ovr, spr_ovr, roz_ovr, bg_ovr, tx_ovr}),
+	.vblank_ev(core_vblank_ev), .spr_ovr_ev(dbg_spr_ovr_ev), .fb_ovr_ev(dbg_fb_ovr_ev), .roz_ovr_ev(dbg_roz_ovr_ev),
+	.copy_done(dbg_copy_done), .spr_frame_cycles(dbg_spr_cycles),
+	.core_reset(reset), .osd_reset(status[0]), .cpu_reset(~core_run),
+	.dsw_reads(dbg_dsw_reads), .dsw_bad(dbg_dsw_bad), .dsw_last_bad(dbg_dsw_last_bad),
+	.ymf_overrun(dbg_ymf_overrun), .ymf_wait_max(dbg_ymf_wait_max), .if_wait_max(dbg_if_wait_max)
+);
 `endif
 
+// CRT adjust (rtl/video/ms32_crt.sv): H-Size, H-Position, V-Shift on the
+// output, not on the rotated HDMI copy below; out of the path when it is off
+// or the scandoubler runs.
+wire [7:0] crt_r, crt_g, crt_b;
+wire       crt_hs, crt_vs, crt_hb, crt_vb, crt_on, crt_ce;
+ms32_crt u_crt (
+	.clk(clk_sys), .ce(ce_pix),
+	.adjust(status[94] & ~forced_scandoubler),
+	.hsize_idx(status[99:95]), .hpos_idx(status[106:100]), .vshift_idx(status[112:107]),
+	.r_in(r), .g_in(g), .b_in(b),
+	.hs_in(hsync), .vs_in(vsync), .hb_in(hblank), .vb_in(vblank),
+	.active(crt_on), .ce_out(crt_ce),
+	.r_out(crt_r), .g_out(crt_g), .b_out(crt_b),
+	.hs_out(crt_hs), .vs_out(crt_vs), .hb_out(crt_hb), .vb_out(crt_vb)
+);
+
 assign CLK_VIDEO = clk_sys;
-assign CE_PIXEL  = ce_pix;
-assign VGA_DE = ~(hblank | vblank);
-assign VGA_HS = hsync;
-assign VGA_VS = vsync;
-assign VGA_R  = r;
-assign VGA_G  = g;
-assign VGA_B  = b;
+assign CE_PIXEL  = crt_on ? crt_ce : ce_pix;
+assign VGA_DE = crt_on ? ~(crt_hb | crt_vb) : ~(hblank | vblank);
+assign VGA_HS = crt_on ? crt_hs : hsync;
+assign VGA_VS = crt_on ? crt_vs : vsync;
+assign VGA_R  = crt_on ? crt_r  : r;
+assign VGA_G  = crt_on ? crt_g  : g;
+assign VGA_B  = crt_on ? crt_b  : b;
 
 ///////////////////////   HDMI ROTATION   /////////////////////////
 
@@ -467,8 +533,8 @@ wire [7:0]  r_burstcnt, r_be;
 wire [28:0] r_addr;
 wire [63:0] r_din;
 screen_rotate_two screen_rotate_two (
-	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
-	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
+	.CLK_VIDEO(clk_sys), .CE_PIXEL(ce_pix),   // the native raster, whatever CRT adjust does
+	.VGA_R(r), .VGA_G(g), .VGA_B(b), .VGA_HS(hsync), .VGA_VS(vsync), .VGA_DE(~(hblank | vblank)),
 	.rotate_ccw(rotate_ccw), .no_rotate(~rotate_en), .flip(flip_180), .two_screen(1'b0), .video_rotated(),
 	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),

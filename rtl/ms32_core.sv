@@ -10,6 +10,7 @@ module ms32_core (
 	input  logic        clk_cpu,
 	input  logic        sys_reset,        // clk_sys; low while a capture loads
 	input  logic        cpu_run,          // clk_sys; 0 holds the V70 in reset
+	input  logic        pause,            // clk_sys; 1 suspends the V70
 	input  logic        invert_lines,
 
 	input  logic [31:0] inputs,
@@ -43,6 +44,10 @@ module ms32_core (
 	output logic        bg_req,   output logic [23:0] bg_addr,  input logic bg_valid,  input logic [63:0] bg_data,
 	output logic        roz_req,  output logic [23:0] roz_addr, input logic roz_valid, input logic [63:0] roz_data,
 	output logic        spr_req,  output logic [27:0] spr_addr, input logic spr_valid, input logic [63:0] spr_data,
+	// object RAM in SDRAM (ms32_objram)
+	output logic        obj_rreq, output logic [12:0] obj_raddr, input logic obj_rvalid, input logic [63:0] obj_rdata,
+	output logic        obj_wreq, output logic [15:0] obj_waddr, output logic obj_we16, output logic [15:0] obj_wdata,
+	input  logic        obj_wbusy,
 
 	// clk_sys: sprite frame buffer
 	input  logic        DDRAM_BUSY,
@@ -65,6 +70,10 @@ module ms32_core (
 
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
 	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz,
+	output logic        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_copy_done,
+	output logic [23:0] dbg_spr_cycles,
+	output logic [15:0] dbg_dsw_reads, dbg_dsw_bad,                // clk_cpu
+	output logic [31:0] dbg_dsw_last_bad,                          // the last sprite frame's length
 	output logic [31:0] dbg_pc                                   // clk_cpu
 );
 
@@ -74,16 +83,21 @@ module ms32_core (
 	logic        field_ev;
 	logic [15:0] vram_wdata;
 	logic [12:0] txram_addr, bgram_addr, priram_addr;
-	logic [14:0] rozram_addr, objram_addr;
+	logic [14:0] rozram_addr;
 	logic [10:0] lineram_addr;
 	logic [15:0] palram_addr;
 	logic        txram_wel, txram_weh, bgram_wel, bgram_weh, rozram_wel, rozram_weh, lineram_wel, lineram_weh;
-	logic        objram_wel, objram_weh, palram_wel, palram_weh, priram_we;
-	logic [15:0] txram_rdata, bgram_rdata, rozram_rdata, lineram_rdata, objram_rdata, palram_rdata;
+	logic        palram_wel, palram_weh, priram_we;
+	logic [15:0] txram_rdata, bgram_rdata, rozram_rdata, lineram_rdata, palram_rdata;
+	logic        oc_req, oc_valid, wq_valid, wq_pop;
+	logic [14:0] oc_addr;
+	logic [15:0] oc_rdata;
+	logic [32:0] wq_data;
+	logic [5:0]  wq_level;
 	logic [7:0]  priram_rdata;
 
 	ms32_cpu_sys u_sys (
-		.clk_cpu(clk_cpu), .clk_sys(clk_sys), .rst_sys(sys_reset), .cpu_run_sys(cpu_run), .invert_lines(invert_lines),
+		.clk_cpu(clk_cpu), .clk_sys(clk_sys), .rst_sys(sys_reset), .cpu_run_sys(cpu_run), .pause_sys(pause), .invert_lines(invert_lines),
 		.inputs(inputs), .dsw(dsw), .mahjong(mahjong), .mj_keys(mj_keys),
 		.nv_addr(nv_addr), .nv_rdata(nv_rdata), .nv_written(nv_written),
 		.vreg_we(vreg_we), .vreg_off(vreg_off), .vreg_data(vreg_data),
@@ -96,11 +110,13 @@ module ms32_core (
 		.bgram_addr(bgram_addr), .bgram_wel(bgram_wel), .bgram_weh(bgram_weh), .bgram_rdata(bgram_rdata),
 		.rozram_addr(rozram_addr), .rozram_wel(rozram_wel), .rozram_weh(rozram_weh), .rozram_rdata(rozram_rdata),
 		.lineram_addr(lineram_addr), .lineram_wel(lineram_wel), .lineram_weh(lineram_weh), .lineram_rdata(lineram_rdata),
-		.objram_addr(objram_addr), .objram_wel(objram_wel), .objram_weh(objram_weh), .objram_rdata(objram_rdata),
+		.wq_valid(wq_valid), .wq_data(wq_data), .wq_pop(wq_pop), .wq_level(wq_level),
+		.obj_req(oc_req), .obj_addr(oc_addr), .obj_valid(oc_valid), .obj_rdata(oc_rdata),
 		.palram_addr(palram_addr), .palram_wel(palram_wel), .palram_weh(palram_weh), .palram_rdata(palram_rdata),
 		.priram_addr(priram_addr), .priram_we(priram_we), .priram_rdata(priram_rdata),
 		.vram_wdata(vram_wdata),
-		.dbg_pc(dbg_pc), .dbg_accesses(), .dbg_cache_hits(), .dbg_cache_misses()
+		.dbg_pc(dbg_pc), .dbg_accesses(), .dbg_cache_hits(), .dbg_cache_misses(),
+		.dbg_dsw_reads(dbg_dsw_reads), .dbg_dsw_bad(dbg_dsw_bad), .dbg_dsw_last_bad(dbg_dsw_last_bad)
 	);
 
 	// jaleco_ms32_sysctrl sound_reset_w: bit 0 pulses the Z80's reset
@@ -114,7 +130,10 @@ module ms32_core (
 		.bgram_addr(bgram_addr), .bgram_wel(bgram_wel), .bgram_weh(bgram_weh), .bgram_rdata(bgram_rdata),
 		.rozram_addr(rozram_addr), .rozram_wel(rozram_wel), .rozram_weh(rozram_weh), .rozram_rdata(rozram_rdata),
 		.lineram_addr(lineram_addr), .lineram_wel(lineram_wel), .lineram_weh(lineram_weh), .lineram_rdata(lineram_rdata),
-		.objram_addr(objram_addr), .objram_wel(objram_wel), .objram_weh(objram_weh), .objram_rdata(objram_rdata),
+		.obj_wq_valid(wq_valid), .obj_wq_data(wq_data), .obj_wq_pop(wq_pop), .obj_wq_level(wq_level),
+		.obj_cpu_req(oc_req), .obj_cpu_addr(oc_addr), .obj_cpu_valid(oc_valid), .obj_cpu_rdata(oc_rdata),
+		.obj_sd_rreq(obj_rreq), .obj_sd_raddr(obj_raddr), .obj_sd_rvalid(obj_rvalid), .obj_sd_rdata(obj_rdata),
+		.obj_sd_wreq(obj_wreq), .obj_sd_waddr(obj_waddr), .obj_sd_we16(obj_we16), .obj_sd_wdata(obj_wdata), .obj_sd_wbusy(obj_wbusy),
 		.palram_addr(palram_addr), .palram_wel(palram_wel), .palram_weh(palram_weh), .palram_rdata(palram_rdata),
 		.priram_addr(priram_addr), .priram_we(priram_we), .priram_rdata(priram_rdata),
 		.tx_rom_req(tx_req),   .tx_rom_addr(tx_addr),   .tx_rom_valid(tx_valid),   .tx_rom_data(tx_data),
@@ -128,8 +147,9 @@ module ms32_core (
 		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr),
 		.tx_overrun(tx_overrun), .bg_overrun(bg_overrun), .roz_overrun(roz_overrun), .spr_overrun(spr_overrun),
 		.fb_overrun(fb_overrun), .bad_primask(bad_primask),
-		.spr_frame_cycles(), .spr_drawn(),
-		.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz)
+		.spr_frame_cycles(dbg_spr_cycles), .spr_drawn(),
+		.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
+		.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_copy_done(dbg_copy_done)
 	);
 
 endmodule

@@ -129,3 +129,6 @@ __pycache__/
 
 # SignalTap file Quartus drops beside a project it opens
 *.sld
+
+# bench source lists (the *.f rule above is for Quartus files)
+!sim/*/files.f

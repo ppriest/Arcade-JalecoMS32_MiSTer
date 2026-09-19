@@ -38,7 +38,12 @@ module ms32_video (
 	input  logic [12:0] bgram_addr,   input logic bgram_wel,   input logic bgram_weh,   output logic [15:0] bgram_rdata,
 	input  logic [14:0] rozram_addr,  input logic rozram_wel,  input logic rozram_weh,  output logic [15:0] rozram_rdata,
 	input  logic [10:0] lineram_addr, input logic lineram_wel, input logic lineram_weh, output logic [15:0] lineram_rdata,
-	input  logic [14:0] objram_addr,  input logic objram_wel,  input logic objram_weh,  output logic [15:0] objram_rdata,
+	// object RAM: CPU requests on clk (ms32_cpu_sys's crossing), the RAM in SDRAM
+	input  logic        obj_wq_valid, input logic [32:0] obj_wq_data, output logic obj_wq_pop, input logic [5:0] obj_wq_level,
+	input  logic        obj_cpu_req,  input logic [14:0] obj_cpu_addr, output logic obj_cpu_valid, output logic [15:0] obj_cpu_rdata,
+	output logic        obj_sd_rreq,  output logic [12:0] obj_sd_raddr, input logic obj_sd_rvalid, input logic [63:0] obj_sd_rdata,
+	output logic        obj_sd_wreq,  output logic [15:0] obj_sd_waddr, output logic obj_sd_we16, output logic [15:0] obj_sd_wdata,
+	input  logic        obj_sd_wbusy,
 	input  logic [15:0] palram_addr,  input logic palram_wel,  input logic palram_weh,  output logic [15:0] palram_rdata,
 	input  logic [12:0] priram_addr,  input logic priram_we,                             output logic [7:0]  priram_rdata,
 
@@ -76,7 +81,10 @@ module ms32_video (
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
 	output logic [23:0] spr_frame_cycles,
 	output logic [12:0] spr_drawn,
-	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz
+	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz,
+	// one clk each, for the ISSP probe: a sprite frame still drawing when the next
+	// copy is done, a sprite frame-buffer line read late, a ROZ line late, the copy done
+	output logic        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_copy_done
 );
 
 	// ------------------------------------------------------------ registers
@@ -88,7 +96,11 @@ module ms32_video (
 	logic        bgmode;
 	always_ff @(posedge clk) begin
 		if (reset) begin
-			bgmode <= 1'b0; brt0 <= 16'd0; brt1 <= 16'd0; spr_ctrl10 <= 16'd0;
+			// MAME's video_start defaults, "tp2m32 doesn't set the brightness
+			// registers so we need sensible defaults" (ms32_v.cpp 82-84): the
+			// brightness pair 0xFFFF and sprite control 0x10 = 0x8000 (list
+			// walked 0->tail). tp2m32 never writes either.
+			bgmode <= 1'b0; brt0 <= 16'hFFFF; brt1 <= 16'hFFFF; spr_ctrl10 <= 16'h8000;
 		end else if (vreg_we) begin
 			if (vreg_off[11:5] == 7'b1010_000 && vreg_off[4:2] < 3'd6) tx_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA00-0xA17
 			if (vreg_off[11:5] == 7'b1010_001 && vreg_off[4:2] < 3'd6) bg_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA20-0xA37
@@ -165,13 +177,15 @@ module ms32_video (
 		.line_addr(roz_la), .line_data(roz_ld),
 		.vram_addr(roz_va), .vram_data(roz_vd),
 		.rom_req(roz_rom_req), .rom_addr(roz_rom_addr), .rom_valid(roz_rom_valid), .rom_data(roz_rom_data),
-		.pen(roz_pen), .colour(roz_col), .opaque(roz_op), .fetch_overrun(roz_overrun), .overrun_ev(),
+		.pen(roz_pen), .colour(roz_col), .opaque(roz_op), .fetch_overrun(roz_overrun), .overrun_ev(dbg_roz_ovr_ev),
 		.line_done(), .line_cycles(), .line_misses(),
 		.dbg_fill(dbg_roz_fill), .dbg_hit(dbg_roz_hit), .dbg_pen_nz(dbg_roz_pen_nz)
 	);
 
 	// --------------------------------------------------------------- sprites
-	logic        copy_done, obj_ready, obj_rd;
+	logic        copy_done, obj_ready, obj_rd, spr_busy;
+	assign dbg_spr_ovr_ev = copy_done && spr_busy;   // the engine's frame_start while busy
+	assign dbg_copy_done  = copy_done;
 	logic [14:0] obj_addr;
 	logic [15:0] obj_data;
 	logic        j_req, j_we, j_beat, j_done;
@@ -179,7 +193,10 @@ module ms32_video (
 	logic [63:0] j_din, j_dout;
 	ms32_objram u_objram (
 		.clk(clk), .reset(reset),
-		.cpu_clk(cpu_clk), .cpu_addr(objram_addr), .cpu_wel(objram_wel), .cpu_weh(objram_weh), .cpu_wdata(cpu_wdata), .cpu_rdata(objram_rdata),
+		.wq_valid(obj_wq_valid), .wq_data(obj_wq_data), .wq_pop(obj_wq_pop), .wq_level(obj_wq_level),
+		.cpu_req(obj_cpu_req), .cpu_addr(obj_cpu_addr), .cpu_valid(obj_cpu_valid), .cpu_rdata(obj_cpu_rdata),
+		.sd_rreq(obj_sd_rreq), .sd_raddr(obj_sd_raddr), .sd_rvalid(obj_sd_rvalid), .sd_rdata(obj_sd_rdata),
+		.sd_wreq(obj_sd_wreq), .sd_waddr(obj_sd_waddr), .sd_we16(obj_sd_we16), .sd_wdata(obj_sd_wdata), .sd_wbusy(obj_sd_wbusy),
 		.frame_start(vblank_ev), .copy_done(copy_done), .copying(),
 		.reverse(~spr_ctrl10[15]), .obj_rd(obj_rd), .obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready),
 		.j_req(j_req), .j_we(j_we), .j_addr(j_addr), .j_din(j_din), .j_beat(j_beat), .j_dout(j_dout), .j_done(j_done)
@@ -195,7 +212,7 @@ module ms32_video (
 		.obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready), .obj_rd(obj_rd),
 		.rom_req(spr_rom_req), .rom_addr(spr_rom_addr), .rom_valid(spr_rom_valid), .rom_data(spr_rom_data),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready),
-		.busy(), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn)
+		.busy(spr_busy), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn)
 	);
 	ms32_sprite_fb u_fb (
 		.clk(clk), .reset(reset),
@@ -205,7 +222,7 @@ module ms32_video (
 		.j_req(j_req), .j_we(j_we), .j_addr(j_addr), .j_din(j_din), .j_beat(j_beat), .j_dout(j_dout), .j_done(j_done),
 		.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 		.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
-		.rd_overrun(fb_overrun), .rd_overrun_ev(), .wr_stall_cycles()
+		.rd_overrun(fb_overrun), .rd_overrun_ev(dbg_fb_ovr_ev), .wr_stall_cycles()
 	);
 
 	// ---------------------------------------------------- palette, priority

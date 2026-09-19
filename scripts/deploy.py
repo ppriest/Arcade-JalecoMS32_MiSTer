@@ -200,18 +200,21 @@ def check_build(rbf, log, sta, allow_timing_miss=False):
 
 
 # ---------------------------------------------------------------------------
-# Remote naming: Arcade-JalecoMS32_NNNNNNNN.rbf, the number incrementing per deploy.
+# Remote naming: JalecoMS32_NNNNNNNN.rbf, the number incrementing per deploy --
+# the built or released Arcade-JalecoMS32*.rbf without "Arcade-", as the .mra's
+# <rbf> names it (README, "Installation"). Builds deployed under the old
+# Arcade-JalecoMS32_ name are left on the device; no .mra launches them any more.
 #
-# MiSTer resolves the .mra's <rbf>Arcade-JalecoMS32</rbf> to the highest-sorting
-# Arcade-JalecoMS32_*.rbf in the cores folder, so every deploy leaves the previous
+# MiSTer resolves the .mra's <rbf>JalecoMS32</rbf> to the highest-sorting
+# JalecoMS32_*.rbf in the cores folder, so every deploy leaves the previous
 # builds in place as fallbacks: rename the newest to .held (any name that no
 # longer ends in .rbf) and the one before it is what the .mra launches. The
 # counter starts at 10000001 and is read back from the device, .held files
-# included, so a held build's number is never reused. A plain Arcade-JalecoMS32.rbf
+# included, so a held build's number is never reused. A plain JalecoMS32.rbf
 # from before this convention is moved aside to .held rather than left to
 # compete with the numbered ones.
 # ---------------------------------------------------------------------------
-RBF_STEM = "Arcade-JalecoMS32"
+RBF_STEM = "JalecoMS32"
 RBF_FIRST = 10000001
 
 
@@ -236,7 +239,7 @@ def main():
     ap.add_argument("--sta", default=str(REPO / "build" / "output_files" / "MS32_stp.sta.summary"))
     ap.add_argument("--name", default=None,
                     help="remote core filename. Default: the next numbered "
-                         "Arcade-JalecoMS32_NNNNNNNN.rbf on the device (see "
+                         "JalecoMS32_NNNNNNNN.rbf on the device (see "
                          "next_rbf_name); the .mra's <rbf> tag must match the "
                          "part before the underscore")
     ap.add_argument("--all", action="store_true",
