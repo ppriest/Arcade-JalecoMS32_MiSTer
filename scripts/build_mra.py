@@ -138,6 +138,10 @@ def switches_xml(game):
     return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
 
 
+# sets with a known game-breaking fault, kept out of the main list (README, Status)
+UNSUPPORTED = {"wpksocv2"}
+
+
 def main():
     check_map()
     caps = [a for a in sys.argv[2:]] if len(sys.argv) > 2 and sys.argv[1] == "--with-capture" else []
@@ -153,6 +157,8 @@ def main():
         parent = PARENT.get(game)
         if cap:
             out_dir = REPO / "releases" / "_dev"
+        elif game in UNSUPPORTED:
+            out_dir = REPO / "releases" / "unsupported"
         elif parent in SETS:
             out_dir = REPO / "releases" / "_alternatives" / f"_{NAMES[parent]}"
         else:

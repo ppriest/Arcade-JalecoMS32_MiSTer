@@ -106,6 +106,7 @@ from `ROM_START`.
   `Arcade-JalecoMS32_20260919.rbf` becomes `JalecoMS32_20260919.rbf`. The `.mra` files look for
   `JalecoMS32`
 * Take the `*.mra` files from `releases/` and `releases/_alternatives/` and put them in `_Arcade`
+* `releases/unsupported/` holds sets with a known game-breaking fault (World PK Soccer V2, see Status)
 * Put the MAME ROMs in `games/mame`
 
 ## Status
