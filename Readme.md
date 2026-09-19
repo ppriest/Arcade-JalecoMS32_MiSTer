@@ -112,43 +112,18 @@ from `ROM_START`.
 
 Initial release. Much untested.
 
-* Sound is not yet rechecked in every game since the lost-command fix
 * World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
-* P-47 Aces' audio pitch was low and wandered: the YMF271 missed ~5% of its 44.1 kHz sample ticks
-  (ISSP probe V, build `70897e0`). Two changes: sprites to the lowest-priority SDRAM port (`dd52dda`,
-  halved the misses) and the YMF271 on its own 56.47 MHz clock (`2b3b15d`; no missed tick in
-  `sim/ymf_own_tb`). On the board P-47 Aces now nearly keeps up with MAME and The Game Paradise is
-  fine.
-* Gratia slows down much more than MAME (on the board, build `2b3b15d`). The video engines and the
-  YMF271 had no overruns (ISSP probe V), so the V70 is the limit: in `system_tb` it was held for up to
-  137,141 clocks a frame waiting on object RAM. `cc45883` posts its object RAM writes through a
-  queue; in the same 1,200-frame run the frames held over 20,000 clocks drop from 36 to 4. Not yet
-  compared with MAME on the board.
-* The Game Paradise title screen occasionally showed the Japanese title for a frame with the Language
-  DIP on English (on the board, before and after `102bffd`; MAME does not). Not caused by a bad DIP
-  read: the V70 read the DIP switches 6,022 times, all equal to the switch register (ISSP probe V).
-  Not seen again after the first working OSD Reset (`aec3176`); unexplained.
-* The Game Paradise attract (MAME frame 1326): a screen-shaped shadow sprite is drawn over the
-  green-haired girl instead of under her. MAME draws the same; its shadow-sprite handling is a guess
-  (`ms32.cpp`, "gametngk seems to need some kind of shadow sprites"). Parked.
 * The Game Paradise: against footage of the real board
   ([PCB #7 The Game Paradise! (Game Tengoku)](https://www.youtube.com/watch?v=GCWV1hdBEBc)), the
   graphics are not authentic in places, the shadows especially. The ship standing still in the
   attract's gameplay section is authentic: the board does the same.
-* ROZ layer at steep rotation angles showed vertical stripes of stale pixels at the end of each line
-  (the right of the unrotated picture, the left on ROT270 sets): lines not rendered in time, because
-  the 64-entry ROM cache refilled on nearly every pixel. Since `102bffd` the cache is 2-way with 2,048
-  sets, and vblank warms it with line 0. In `sim/layers_tb +SWEEP=1` (0-90 degrees at zooms 0.5, 1
-  and 2) the worst line at ROM latency 24 went from overrunning to 4,928 of 6,144 clocks, and 3,888
-  away from exactly 90 degrees. The Game Paradise's rotating scenes checked on the board (`102bffd`).
 
 ### Todo
 
-- [ ] Recheck sound across the game list
 - [ ] The games' Flip Screen DIP (sysctrl control bit 1)
 - [x] Mahjong inputs
-- [ ] CRT Offset: OSD CRT adjust with H-Size, H-Position and V-Shift (no V-size) is in; not yet checked on a CRT
-- [ ] Fast ROM loading
+- [x] CRT Offset: OSD CRT adjust with H-Size, H-Position and V-Shift (no V-size) is in; not yet checked on a CRT
+- [x] Fast ROM loading
 - [ ] Hiscore
 - [ ] DIP Flipscreen
 
@@ -198,7 +173,7 @@ This core is being developed with heavy use of a frontier coding assistant.
 
 ## Verification
 
-Not PCB-validated. MAME is the accuracy reference, with its own acknowledged uncertainties noted
+Not PCB-validated other than videos. MAME is the accuracy reference, with its own acknowledged uncertainties noted
 where they matter: [`docs/MAME_KLUDGES.md`](docs/MAME_KLUDGES.md) lists MAME's guesses and hacks and
 what the core does with each. Where Charles MacDonald measured the hardware (the notes at the top of
 `ms32.cpp`), [`docs/HARDWARE_NOTES.md`](docs/HARDWARE_NOTES.md) checks the core against every point.
