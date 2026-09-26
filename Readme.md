@@ -55,6 +55,11 @@ and F-1 Super Battle, which has a core file of its own.
 
 F-1 Super Battle has analogue inputs - left stick x-axis is bound to steering, and both the left and right sticks y-axis is the accelerator when pushed up. Brake is digital. Shifter is a toggle.
 
+| | |
+|-|-|
+| ![F-1 Super Battle title](docs/screenshots/f1superb/20260926_212526-screen.png) | ![F-1 Super Battle attract](docs/screenshots/f1superb/20260926_212608-screen.png) |
+| ![F-1 Super Battle race](docs/screenshots/f1superb/20260926_212618-screen.png) | ![F-1 Super Battle ranking](docs/screenshots/f1superb/20260926_212640-screen.png) |
+
 The mahjong sets support keyboard with MAME's default keys:
 * A-N for the tiles
 * Left Ctrl - Kan
