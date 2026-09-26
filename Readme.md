@@ -9,7 +9,6 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 - [Games](#games)
   - [Game Notes](#game-notes)
   - [Supported](#supported)
-    - [In progress](#in-progress)
 - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
 - [Installation](#installation)
@@ -24,6 +23,12 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 
 ## History
 
+* **`Arcade-JalecoMS32F1_20260926.rbf`** — F-1 Super Battle
+  * F-1 Super Battle specific build
+  * Based on the recent work of Andrea Bogazzi (@asturu) in MAME
+    * Two FPU coprocessors, road plane, ROZ line plane, the priority-RAM mixer, analogue controls.
+  * Runs on a 32 MB SDRAM module: the road and sprite graphics are read from DDR3
+
 * **`Arcade-JalecoMS32_20260919.rbf`**
   * P-47 Aces' slowdown and pitch-bending resolved
   * Gratia slowdown fixed
@@ -32,7 +37,7 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
   * Pause button; OSD Reset works; Stereo Mix option; keyboard 5 and 6 insert coins
   * Core name on the device is `JalecoMS32` (see Installation)
 
-* **`Arcade-JalecoMS32_20260913.rbf`** (commit `4be9bdf`) **Alpha**
+* **`Arcade-JalecoMS32_20260913.rbf`** **Alpha**
   * First release
   * Sound: Good in Desert War and Tetris Plus 2
   * Sound commands no longer lost: the V70 waits 40 us after each one, as MAME does. Before this
@@ -43,11 +48,14 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 
 ## Games
 
-The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM module (`docs/ROADMAP.md`, "Game scope").
+The goal is the MegaSystem 32 sets in MAME's `ms32.cpp` that fit a 32 MB SDRAM module (`docs/ROADMAP.md`, "Game scope"),
+and F-1 Super Battle, which has a core file of its own.
 
 ### Game Notes
 
-The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
+F-1 Super Battle has analogue inputs - left stick x-axis is bound to steering, and both the left and right sticks y-axis is the accelerator when pushed up. Brake is digital. Shifter is a toggle.
+
+The mahjong sets support keyboard with MAME's default keys:
 * A-N for the tiles
 * Left Ctrl - Kan
 * Left Alt - Pon
@@ -55,9 +63,7 @@ The mahjong sets take a PS/2 or USB keyboard with MAME's default keys:
 * Left Shift - Reach
 * Z - Ron
 * 1 - Start (joystick Start works too). 
-* 5 - Coin 1, 6 - Coin 2 (on every set; joystick Coin works too)
-
-Every set: the joystick Pause button toggles a pause of the main CPU. The picture holds; the sound board keeps running, so a note or loop that was playing carries on.
+* 5 - Coin 1, 6 - Coin 2
 
 ### Supported
 
@@ -77,17 +83,7 @@ Every set: the joystick Pause button toggles a pause of the main CPU. The pictur
 | Mahjong Angel Kiss (ver 1.0) | 1995 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
 | Ryuusei Janshi Kirara Star (ver 1.0) | 1996 | Jaleco | SS92047-01 | Mahjong keys from a keyboard |
 | Vs. Janshi Brandnew Stars (Ver 1.1, MegaSystem 32 Version) | 1997 | Jaleco | SS92046-01 | Mahjong keys from a keyboard |
-
-"Key" is the cartridge's decryption chip, which selects the tile ROM key. Clones have `.mra` files in
-`releases/_alternatives/`. Every `<part>` carries its CRC, so a clone loads from its own zip or from
-a merged parent zip. The streams of all twenty sets were checked byte for byte against images built
-from `ROM_START`.
-
-### In progress
-
-| MAME description | State |
-|-|-|
-| F-1 Super Battle | Its own build, `JalecoMS32F1`, from [MAME PR 16135](https://github.com/mamedev/mame/pull/16135). Needs an SDRAM module larger than 32 MB: the set is 56.75 MB. The two FPU coprocessors, the road plane, the priority-RAM mixing and the controls are written and the build closes timing, but it has never been run on a board, so it is here rather than in the list above — `docs/ROADMAP.md`, "F-1 Super Battle" |
+| F-1 Super Battle | 1994 | Jaleco | SS92046-01 | Core file `JalecoMS32F1`. Wheel on the left stick (or the d-pad); accelerator on either stick pushed up, or button for full throttle |
 
 ### Out of scope for now
 
@@ -103,6 +99,7 @@ from `ROM_START`.
 | System controller | CRTC, interrupts, timer | Written |
 | Tilemaps, ROZ, sprites, mixer | Video | Written, pixel-exact against MAME
 | Cartridge decryption chip | Tile ROM encryption | Decrypted in the download path |
+| Jaleco FPU (x2) | F-1 Super Battle's maths coprocessors | Written from MAME's `jalfpu` |
 | Z80 | Sound CPU, 8 MHz | Vendored |
 | YMF271 | FM + PCM sound | Vendored Seibu SPI core. Spectrum correlates with MAME, RMS within 2% |
 
@@ -120,9 +117,9 @@ from `ROM_START`.
 Initial release. Much untested.
 
 * World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
-* Now and then the core leaves the MiSTer in a state where no MS32 game starts (a blank screen
-  in one colour), on this build or any earlier one, until the board is power-cycled; a
-  `reboot` is not enough. Cause not found.
+* Now and then the core leaves the MiSTer in a state where a reboot is required
+* F-1 Super Battle:
+  * The link board (several cabinets racing each other) is not emulated
 * The Game Paradise: against footage of the real board
   ([PCB #7 The Game Paradise! (Game Tengoku)](https://www.youtube.com/watch?v=GCWV1hdBEBc)), the
   graphics are not authentic in places, the shadows especially. The ship standing still in the
@@ -130,12 +127,11 @@ Initial release. Much untested.
 
 ### Todo
 
-- [ ] The games' Flip Screen DIP (sysctrl control bit 1)
-- [x] Mahjong inputs
-- [x] CRT Offset: OSD CRT adjust with H-Size, H-Position and V-Shift (no V-size) is in; not yet checked on a CRT
-- [x] Fast ROM loading
 - [ ] Hiscore
 - [ ] DIP Flipscreen
+- [ ] F-1 Super Battle: a Gear option, Toggle or Hold for Low, as jtoutrun has
+- [ ] F-1 Super Battle: an optional on-screen HI/LO gear indicator, drawn over the output as the
+      Seta core draws its crosshairs
 
 ### Resource usage
 
@@ -149,6 +145,9 @@ clk_sys setup slack +0.615 ns:
 | RAM blocks | 527 (95%) | 553 |
 | DSP blocks | 58 (52%) | 112 |
 | PLLs | 3 | 6 |
+
+`MS32F1` (F-1 Super Battle) at commit `473cbad`: 39,380 ALMs (94%), 549 of 553 RAM blocks; every
+clock meets timing, the HDMI output registers held in a placement region (`MS32F1.qsf`).
 
 Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits (256 of up to 40),
 and each inferred RAM takes whole blocks, so a 48-entry register file costs the same block as a
@@ -211,10 +210,10 @@ what the core does with each. Where Charles MacDonald measured the hardware (the
 - **Zakk** ([zakk4223](https://github.com/zakk4223)) for the YMF271 (OPX) sound chip implementation from [Arcade-SeibuSPI_MiSTer](https://github.com/zakk4223/Arcade-SeibuSPI_MiSTer)
 - **Meathax** for the V60/V70 CPU core from the Sega System 32 core,
   [meathax/s32](https://github.com/meathax/s32), and its verification suite which are derived from MAME.
-- The **MAMEdev team** — in particular **David Haywood**, **Paul Priest** and **Luca Elia** — for
+- The **MAMEdev team** — in particular **David Haywood**, **Paul Priest**, **Luca Elia**, **Andrea Bogazzi** — for
   [MAME](https://github.com/mamedev/mame)'s `jaleco/ms32.cpp`, `ms32_v.cpp`, `ms32_sprite.cpp`,
-  `jaleco_ms32_sysctrl.cpp` and `jalcrpt.cpp`, and **Farfetch'd** and **R. Belmont** for its V60
-  core, which is the behavioural contract of the CPU core here.
+  `jaleco_ms32_sysctrl.cpp` and `jalcrpt.cpp`, and **Farfetch'd** and **R. Belmont** for the V60
+  core.
 
 ## Layout
 
