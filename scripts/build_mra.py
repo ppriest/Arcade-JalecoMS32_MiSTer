@@ -7,6 +7,10 @@
         -> releases/_dev/<Description> + capture tetrisp-title.mra: the ROMs plus the
            capture blob as rom index 2, so the board renders that frame from the real ROMs
 
+Each normal .mra also gets a releases/_dev/<Description> (RAM dump).mra twin whose
+<nvram> is 1,179,648 bytes: with a DEBUG_ISSP build, scripts/dump_ram.py trigger
+has the core write the NVRAM and the video RAMs into that file (MS32.sv).
+
 The map is ms32_sdram_top.sv's (this file repeats its bases and sizes and
 checks them against that file). Each region is filled by REPEATING its ROM
 data to the region size, so tile numbers past the ROM wrap the way MAME's
@@ -128,6 +132,44 @@ def uses_mahjong(game):
     return False
 
 
+# MiSTer's OSD draws a DIP as " name:" padded to 28 columns with the value
+# right-aligned (Main_MiSTer menu.cpp, MENU_ARCADE_DIP1):
+#     l = 28 - strlen(value) - strlen(" name:"); while (l--) strcat(s, " ");
+# l is a signed char, so a line that does not fit pads until it wraps and the
+# value is pushed off the screen -- it still cycles, invisibly. Found on the
+# Seta core (Arcade-Seta_MiSTer scripts/build_mra.py, osd_fit). Every line
+# must satisfy 2 + len(name) + len(setting) <= 28; the tables below shorten
+# MAME's wording where it does not, and anything still too long stops the build.
+OSD_COLS = 28
+OSD_NAME = {
+    "Time (Race Mode)": "Race Time",
+    "Computer's AI (VS Mode)": "CPU AI (VS)",
+    "Winning Rounds (Player VS Player)": "VS Rounds",
+    "After VS Mode": "After VS",
+    "Endless Difficulty": "Endless Level",
+}
+OSD_ID = {
+    "200k and every 1000k": "200k/every 1000k",
+    "Normal and Puzzle Modes": "Normal & Puzzle",
+}
+
+
+def osd_fit(game, name, ids):
+    # bbbxing: "Grute's Attacking Power" and six more like it
+    name = OSD_NAME.get(name, re.sub(r"^(\w+)'s Attacking Power$", r"\1 Attack", name))
+    short = [OSD_ID.get(i, i) for i in ids]
+    # MAME repeats a setting now and then (f1superb's Region lists Europe
+    # twice); only a clash the shortening made is an error
+    if len(set(short)) < len(set(ids)):
+        sys.exit(f"{game}: dip {name!r}: settings are not distinct after shortening")
+    ids = short
+    bad = [i for i in ids if 2 + len(name) + len(i) > OSD_COLS]
+    if bad:
+        sys.exit(f"{game}: dip {name!r} = {bad} is wider than the OSD's {OSD_COLS} columns "
+                 f"(2 + name + setting) -- add a shorter form to OSD_NAME or OSD_ID")
+    return name, ids
+
+
 def switches_xml(game):
     """<switches> for the DSW word at 0xFCC00010: MS32.sv takes index 254 as four
     bytes, low first, so bit b of the word is dip bit b. A bit no switch covers
@@ -143,6 +185,12 @@ def switches_xml(game):
         sys.exit(f"{game}: DEF_STR missing from extract_dips: {sorted(missing)}")
     banks = [("DSW", 0)] + ([("DSW2", 32)] if game == "f1superb" else [])
     default = (1 << (32 * len(banks))) - 1
+    if game == "f1superb":
+        # DSW2 declares only bits 0-3 (DIPs, default 0) and 0xffffff00 (unused,
+        # active low, so 1). MAME reads the undeclared bits 4-7 as 0, and so
+        # 0xFFFFFF00 in all, which is what the core hardwired before this bank
+        # was in the .mra
+        default &= ~(0xF0 << 32)
     dips = []
     for port, shift in banks:
         for name, mask, dflt, settings in sorted(ports[port], key=lambda d: (d[1] & -d[1])):   # OSD in bit order
@@ -157,9 +205,37 @@ def switches_xml(game):
                 ids.append(settings.get(value, "-"))
             if any("," in i for i in ids):
                 sys.exit(f"{game}: dip {name!r} has a comma in a label")
+            name, ids = osd_fit(game, name, ids)
             dips.append(f'    <dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>')
     dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4 * len(banks)))
     return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
+
+
+# Button names for the .mra's <buttons>, per set; a clone without an entry
+# takes its parent's, and a set with neither gets no <buttons> and shows the
+# core's generic "Button 1..5". Names are POSITIONAL, entry i being pad
+# button i+1 (joystick bit 4+i). MS32.sv sends pad buttons 1..5 to MAME's
+# BUTTON1..5, except on f1superb, where they are the accelerator, the brake
+# and the shift toggle. "-" marks a button the game does not use. Filled in
+# by the project owner from the manuals.
+BUTTONS = {
+}
+# the rest of the list stays where CONF_STR's J1 line has it: the core reads
+# fixed bits, so these may not move
+BUTTONS_TAIL = ["Start", "Coin", "Pause", "Service", "Test"]
+BUTTONS_DEFAULT = "A,B,X,Y,R,Start,Select,L"      # CONF_STR's jn line
+
+
+def buttons_xml(game):
+    names = BUTTONS.get(game, BUTTONS.get(PARENT.get(game)))
+    if names is None:
+        return []
+    if not 1 <= len(names) <= 5:
+        sys.exit(f"{game}: BUTTONS has {len(names)} names; the core has 5 buttons")
+    if any("," in n or not n.strip() for n in names):
+        sys.exit(f"{game}: a BUTTONS name is empty or has a comma, which splits the list")
+    names = list(names) + ["-"] * (5 - len(names)) + BUTTONS_TAIL
+    return [f'  <buttons names="{esc(",".join(names))}" default="{BUTTONS_DEFAULT}"/>']
 
 
 # sets kept out of the main list: a known game-breaking fault (README, Status).
@@ -201,6 +277,7 @@ def main():
                f"  <manufacturer>{esc(GAMES[game]['maker'])}</manufacturer>",
                f"  <rbf>{RBF_F1 if game == F1 else RBF}</rbf>",
                "  <mameversion>0286</mameversion>"]
+        xml += buttons_xml(game)
         xml += switches_xml(game)
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.
         key = KEY_INDEX[SET_KEY[game]]
@@ -250,6 +327,12 @@ def main():
             # read back by the HPS when the core asks (MS32.sv, "NVRAM SAVE")
             xml.append('  <nvram index="4" size="8192"/>')
         xml.append("</misterromdescription>")
+        if not cap:
+            dump = [l.replace('size="8192"', 'size="1179648"') for l in xml]
+            dump_dir = REPO / "releases" / "_dev"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            (dump_dir / f"{NAMES.get(game, game)} (RAM dump).mra").write_text(
+                "\n".join(dump) + "\n", encoding="utf-8", newline="\n")
         text = "\n".join(xml)
         assert text.index('<rom index="1">') < text.index('<rom index="0"'), "mod byte must precede rom index 0"
         path = out_dir / (f"{NAMES.get(game, game)} + capture {cap}.mra" if cap else f"{NAMES.get(game, game)}.mra")

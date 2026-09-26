@@ -81,10 +81,10 @@ class Capture:
             raise SystemExit(f"orientation {self.orientation}: snapshot transform not measured")
         # Brightness registers are write-only, so the capture cannot dump
         # them; --wlog records every write, and the last ones before the
-        # capture frame are the values in force. ms32_brightness_w:
-        #   brt_r = 0x100 - (brt[0] >> 8 & 0xff), brt_g = 0x100 - (brt[0] & 0xff),
-        #   brt_b = 0x100 - (brt[1] & 0xff);  brt[2..3] (bank 1) unused by MAME
-        self.brt = [0, 0]
+        # capture frame are the values in force. ms32_brightness_w: bank 0
+        # from brt[0..1], bank 1 from brt[2..3], each
+        #   r = 0x100 - (w0 >> 8 & 0xff), g = 0x100 - (w0 & 0xff), b = 0x100 - (w1 & 0xff)
+        self.brt = [0, 0, 0, 0]
         wl = d / f"{game}_writes.log"
         if wl.exists():
             for line in wl.read_text().splitlines():
@@ -92,7 +92,7 @@ class Capture:
                     continue
                 fr, ln, addr, mask, data, pc = line.split("	")
                 a = int(addr, 16)
-                if a in (0xFCE00280, 0xFCE00284):
+                if 0xFCE00280 <= a <= 0xFCE0028C and a % 4 == 0:
                     self.brt[(a - 0xFCE00280) // 4] = int(data, 16)
                 # tilemaplayoutcontrol is write-only too, so a capture without
                 # --wlog reads it as 0: F-1 Super Battle sets it, and its BG is
@@ -114,24 +114,21 @@ class Capture:
             self.road_ctrl = load_u32(d / f"{game}_roadctrl.bin")
             self.gfx5 = np.fromfile(roms / "gfx5.bin", dtype=np.uint8)
 
-    # ms32_v.cpp update_color(): word0 = RRRRRRRRGGGGGGGG, word1 low byte = B.
-    # Brightness is applied only to colours with bit 14 CLEAR; the capture's
-    # brightness registers are write-only, so the model takes them as args.
-    def palette(self, brt_r=None, brt_g=None, brt_b=None):
-        if brt_r is None: brt_r = 0x100 - ((self.brt[0] >> 8) & 0xFF)
-        if brt_g is None: brt_g = 0x100 - (self.brt[0] & 0xFF)
-        if brt_b is None: brt_b = 0x100 - (self.brt[1] & 0xFF)
+    # ms32_v.cpp update_color(): word0 = RRRRRRRRGGGGGGGG, word1 low byte = B,
+    # no brightness (MAME PR 16243 moved it to the mixer, see brightness()).
+    def palette(self):
         n = 0x8000
         w0 = self.palram[0:2 * n:2].astype(np.int32)
         w1 = self.palram[1:2 * n:2].astype(np.int32)
         r = (w0 >> 8) & 0xFF
         g = w0 & 0xFF
         b = w1 & 0xFF
-        dim = (np.arange(n) & 0x4000) == 0
-        r = np.where(dim, r * brt_r // 0x100, r)
-        g = np.where(dim, g * brt_g // 0x100, g)
-        b = np.where(dim, b * brt_b // 0x100, b)
         return np.stack([r, g, b], axis=1).astype(np.uint8)
+
+    def brightness(self, bank):
+        """(r, g, b) multipliers of brightness bank 0 or 1, 0x100 = unchanged."""
+        w0, w1 = self.brt[2 * bank], self.brt[2 * bank + 1]
+        return np.array([0x100 - ((w0 >> 8) & 0xFF), 0x100 - (w0 & 0xFF), 0x100 - (w1 & 0xFF)], np.int64)
 
 
 def draw_tilemap(vram, tiles, tw, cols, rows, scrollx, scrolly, w, h, color_base):
@@ -200,6 +197,7 @@ def render_sprites(c):
     reverse = (int(c.spr_ctrl[0x10 // 4]) & 0x8000) == 0
     order = range(tail, -1, -8) if reverse else range(0, tail, 8)
     bmp = np.zeros((c.h, c.w), np.uint16)
+    cov = np.zeros((c.h, c.w), bool)   # apply_sprite_effects' box coverage
     pages = {}
     n_drawn = 0
     for s in order:
@@ -254,8 +252,10 @@ def render_sprites(c):
                 xs = destx + np.arange(len(drawx))
                 hit = (pens != 0) & (bmp[cury, xs] == 0)   # first drawn wins
                 bmp[cury, xs[hit]] = base + pens[hit]
+                cov[cury, xs[ok]] = True
             cury += 1; srcy += incy
     c.n_sprites_drawn = n_drawn
+    c.spr_cov = cov
     spridat = (bmp & 0x0FFF).astype(np.int64)
     pri = ((bmp & 0xF000) >> 8).astype(np.int64)
     return spridat, (bmp & 0xFF) != 0, pri
@@ -400,12 +400,61 @@ def render_roz_f1(c):
     return render_lineplane(c, c.rozram, c.lineram, c.roz_ctrl, False, 0x2000, 0, c.roztiles)
 
 
+def priram_bytes(c):
+    return (np.fromfile(c.d / f"{c.game}_priram.bin", dtype="<u4") & 0xFF).astype(np.int64)
+
+
+def pri_index(spr_op, pri, tx_op, roz_op, road_op, bg_op, depth):
+    """The 13-bit priority-RAM index both mixers form per pixel:
+    bit 12 sprite transparent, 11 text transparent, 10 always 1, 9 ROZ
+    transparent, 8 road transparent, 7 BG transparent, 6-3 sprite priority
+    nibble, 2-0 line depth."""
+    return ((~spr_op & 1) << 12) | ((~tx_op & 1) << 11) | (1 << 10) | ((~roz_op & 1) << 9)         | ((~road_op & 1) << 8) | ((~bg_op & 1) << 7) | (pri << 3) | depth
+
+
+def select_pen(code, layers):
+    """code bits 5-3 pick the layer (0 sprite, 1 BG, 2 ROZ, 4 road, 6 text,
+    else nothing), bit 6 the backdrop; a transparent pick is pen 0."""
+    sel = (code >> 3) & 7
+    pen = np.zeros(code.shape, np.int64)
+    for k, (idx, op) in layers.items():
+        pen = np.where((sel == k) & op, idx, pen)
+    return np.where((code >> 6) & 1, 0, pen)
+
+
+def scale(rgb, m, where):
+    return np.where(where[:, :, None], rgb * m // 0x100, rgb)
+
+
+def sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op):
+    """ms32_state::apply_sprite_effects() (PR 16243), run after either mixer:
+    where a sprite's box covers a pixel but no sprite pen is opaque there, the
+    lookup is redone as if a sprite were opaque, and a clear bit 2 glows a
+    sprite pick (bank 1 first when bits 1-0 are 2) or halves anything else.
+    The pass writes (1 + pri) << 8 with pri = attr & 0xf0, so its recovered
+    priority ((cov >> 8) - 1) & 0xf is always 0: the index's sprite nibble is
+    0 whatever the covering sprite's priority. Road bit forced transparent and
+    depth 0, also as MAME, f1superb included."""
+    m = c.spr_cov & ~spr_op
+    code = pri8[pri_index(np.ones_like(spr_op), 0, tx_op, roz_op, np.zeros_like(spr_op), bg_op, 0)]
+    fx = m & (((code >> 2) & 1) == 0)
+    spr_pick = ((code >> 3) & 7) == 0
+    g = fx & spr_pick
+    rgb = scale(rgb, c.brightness(1), g & ((code & 3) == 2))
+    rgb = np.where(g[:, :, None], (rgb + 255) >> 1, rgb)          # alpha_blend_r32(c, white, 128)
+    rgb = np.where((fx & ~spr_pick)[:, :, None], rgb >> 1, rgb)
+    c.n_effect_pixels = int(fx.sum())
+    return rgb
+
+
 def mix_f1(c):
     """ms32_f1superbattle_state::mix_layers(): every pixel is a 13-bit index
     into the priority RAM, whose byte says which layer shows and whether it is
-    dimmed. Transcribed from the PR, index bit for index bit."""
+    halved (bit 2 clear, every layer). No brightness: since PR 16243
+    update_color() applies none and this mixer does not either. Then
+    apply_sprite_effects()."""
     pal = c.palette()
-    pri8 = (np.fromfile(c.d / f"{c.game}_priram.bin", dtype="<u4") & 0xFF).astype(np.int64)
+    pri8 = priram_bytes(c)
 
     tx_idx, tx_op = render_tx(c)
     bg_idx, bg_op = render_bg(c)
@@ -420,87 +469,45 @@ def mix_f1(c):
     # render_sprites gives the attribute's priority nibble already shifted into
     # bits 7-4; the index takes the nibble itself, in bits 6-3
     pri = np.where(spr_op, spr_pri >> 4, 0)
-    idx = ((~spr_op & 1) << 12) | ((~tx_op & 1) << 11) | (1 << 10) | ((~roz_op & 1) << 9) \
-        | ((~road_op & 1) << 8) | ((~bg_op & 1) << 7) | (pri << 3) | depth
-    code = pri8[idx]
-
-    sel = (code >> 3) & 7
-    pen = np.zeros((c.h, c.w), np.int64)
-    pen = np.where(sel == 0, spr & 0x0FFF, pen)
-    pen = np.where(sel == 1, bg_idx, pen)
-    pen = np.where(sel == 2, roz_idx, pen)
-    pen = np.where(sel == 4, road_idx, pen)
-    pen = np.where(sel == 6, tx_idx, pen)
-    pen = np.where(np.isin(sel, [0, 1, 2, 4, 6]), pen, 0)
-    pen = np.where((code >> 6) & 1, 0, pen)        # backdrop
+    code = pri8[pri_index(spr_op, pri, tx_op, roz_op, road_op, bg_op, depth)]
+    pen = select_pen(code, {0: (spr & 0x0FFF, spr_op), 1: (bg_idx, bg_op), 2: (roz_idx, roz_op),
+                            4: (road_idx, road_op), 6: (tx_idx, tx_op)})
 
     rgb = pal[pen & 0x7FFF].astype(np.int64)
-    dim = ((code >> 2) & 1) == 0                   # TODO in the PR too: half brightness
-    rgb = np.where(dim[:, :, None], rgb >> 1, rgb)
+    rgb = np.where((((code >> 2) & 1) == 0)[:, :, None], rgb >> 1, rgb)
+    rgb = sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op)
     return rgb.astype(np.uint8)
 
 
 def mix(c):
-    """screen_update(): the three tilemaps in the order the priority RAM's
-    three probes give, each ORing its bit into a per-pixel priority
-    (BG 1, ROZ 2, TX 4); sprites over that per the eight-probe primask and
-    MAME's per-case table. Transcribed case for case, comments and all."""
-    pri8 = (np.fromfile(c.d / f"{c.game}_priram.bin", dtype="<u4") & 0xFF).astype(np.int64)
-    asc = scr = rot = 0
-    if (pri8[0x2b00 // 2] & 0xFF) == 0x34: asc += 1
-    else: rot += 1
-    if (pri8[0x2e00 // 2] & 0xFF) == 0x34: asc += 1
-    else: scr += 1
-    if pri8[0x3a00 // 2] == 0x09: asc = 3
-    if (pri8[0x3a00 // 2] & 0x30) == 0: scr += 1
-    else: rot += 1
-    c.layer_order = {"bg": scr, "roz": rot, "tx": asc}
-
-    tile = np.zeros((c.h, c.w), np.int64)
-    tpri = np.zeros((c.h, c.w), np.int64)
-    layers = {"bg": (render_bg, 1), "roz": (render_roz, 2), "tx": (render_tx, 4)}
-    for prin in range(4):
-        for name, (fn, bit) in layers.items():
-            if c.layer_order[name] == prin:
-                idx, op = fn(c)
-                tile[op] = idx[op]
-                tpri[op] |= bit
-    spr, sop, spri = render_sprites(c)
-
-    # primask per pixel from the sprite priority nibble
-    probes = [0x1500, 0x1400, 0x1100, 0x1000, 0x0500, 0x0400, 0x0100, 0x0000]
-    primask = np.zeros((c.h, c.w), np.int64)
-    for bit, a in enumerate(probes):
-        v = pri8[((spri | 0x0a00 | a) // 2)]
-        primask |= ((v & 0x38) != 0).astype(np.int64) << bit
-
+    """ms32_state::mix_layers() (PR 16243): the same per-pixel priority-RAM
+    lookup as mix_f1, with the road transparent and depth 0. Then brightness
+    by code bits 1-0: 3 is bank 0; 0 is bank 1 except for text; 2 is bank 1
+    for a sprite pick. Bit 2 clear glows a sprite pick and halves the rest.
+    Then apply_sprite_effects()."""
     pal = c.palette()
-    tile_rgb = pal[tile].astype(np.int64)
-    spr_rgb = pal[spr].astype(np.int64)
-    out = tile_rgb.copy()
-    sprite_over = np.zeros((c.h, c.w), bool)
-    shadow = np.zeros((c.h, c.w), bool)
-    for pm in np.unique(primask):
-        m = primask == pm
-        if pm == 0x00:
-            sprite_over |= m & sop
-        elif pm == 0xf0:
-            sprite_over |= m & sop & (tpri <= 3)
-        elif pm == 0xfc:
-            sprite_over |= m & sop & (tpri <= 1)
-        elif pm == 0xfe:
-            sprite_over |= m & sop & (tpri == 0)
-            shadow |= m & (tpri >= 1) & (tpri <= 3)
-        elif pm == 0xf8:
-            sprite_over |= m & sop & (tpri == 2)
-        elif pm == 0xcc:
-            sprite_over |= m & sop & ((tpri & 2) == 0)
-        else:
-            c.unhandled_primask = int(pm)   # 0xc0 draws noise in MAME; anything else black
-            out[m] = 0
-    out[sprite_over] = spr_rgb[sprite_over]
-    out[shadow] = tile_rgb[shadow] // 2        # alpha_blend_r32(tile, black, 128)
-    return out.astype(np.uint8)
+    pri8 = priram_bytes(c)
+    tx_idx, tx_op = render_tx(c)
+    bg_idx, bg_op = render_bg(c)
+    roz_idx, roz_op = render_roz(c)
+    spr, spr_op, spr_pri = render_sprites(c)
+
+    pri = np.where(spr_op, spr_pri >> 4, 0)
+    none = np.zeros_like(spr_op)
+    code = pri8[pri_index(spr_op, pri, tx_op, roz_op, none, bg_op, 0)]
+    layer = (code >> 3) & 7
+    pen = select_pen(code, {0: (spr & 0x0FFF, spr_op), 1: (bg_idx, bg_op), 2: (roz_idx, roz_op),
+                            6: (tx_idx, tx_op)})
+
+    rgb = pal[pen & 0x7FFF].astype(np.int64)
+    lo = code & 3
+    rgb = scale(rgb, c.brightness(0), lo == 3)
+    rgb = scale(rgb, c.brightness(1), ((lo == 0) & (layer != 6)) | ((lo == 2) & (layer == 0)))
+    fx = ((code >> 2) & 1) == 0
+    rgb = np.where((fx & (layer == 0))[:, :, None], (rgb + 255) >> 1, rgb)
+    rgb = np.where((fx & (layer != 0))[:, :, None], rgb >> 1, rgb)
+    rgb = sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op)
+    return rgb.astype(np.uint8)
 
 
 def render_mixed_layer(c):
@@ -537,9 +544,8 @@ def main():
             print("  " + str(write_sprite_words(c)))
             print("  " + str(write_line_colours(c)))
         rgb = mix_f1(c) if c.f1 else mix(c)
-        c.layer_order = getattr(c, "layer_order", {"road": 0, "bg": 1, "roz": 2, "tx": 3})
         opaque = np.ones((c.h, c.w), bool)
-        print(f"  layer order (bottom first): " + ", ".join(k for k, v in sorted(c.layer_order.items(), key=lambda kv: kv[1])))
+        print(f"  pixels changed by the sprite-effects pass: {c.n_effect_pixels}")
     else:
         idx, opaque = LAYERS[a.layer](c)
         rgb = pal[idx]

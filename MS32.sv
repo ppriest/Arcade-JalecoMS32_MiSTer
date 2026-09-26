@@ -106,6 +106,9 @@ localparam CONF_STR = {
 	"H1P1O[82],BG layer,On,Off;",
 	"H1P1O[83],ROZ layer,On,Off;",
 	"H1P1O[84],Sprites,On,Off;",
+`ifdef F1SUPERB
+	"H1P1O[85],Road layer,On,Off;",
+`endif
 	"-;",
 	// Reset ahead of the joystick lines, as every other core here has it: after
 	// them the OSD entry was shown but status[0] never rose (ISSP probe V)
@@ -141,6 +144,26 @@ wire        nv_written;
 // opens, if the game has written NVRAM since the last save -- the usual
 // shape for arcade cores, and no game knowledge is needed.
 reg nvram_dirty = 1'b0, nvram_save = 1'b0, osd_d = 1'b0;
+// A RAM dump rides the NVRAM upload (DEBUG_ISSP builds, JTAG source D bit
+// 20): the .mra's <nvram size> decides how much the HPS takes and it lands in
+// config/nvram, for SFTP. File layout, 128 KB slots: slot 0 the NVRAM (so the
+// next launch loads a valid one back -- the loader takes the first 8 KB),
+// slot k+1 video-RAM window region k, k = 0..7; 1,179,648 bytes in all.
+// dumping holds from the request until the upload ends.
+wire        dump_req;
+wire        dbg_mem_en;
+wire [2:0]  dbg_mem_reg;
+wire [15:0] dbg_mem_addr;
+wire [15:0] dbg_mem_data;
+reg dumping = 1'b0, dump_d = 1'b0, dump_pulse = 1'b0, upl_d = 1'b0;
+always @(posedge clk_sys) begin
+	dump_d     <= dump_req;
+	upl_d      <= ioctl_upload;
+	dump_pulse <= dump_req && !dump_d;
+	if (dump_req && !dump_d)        dumping <= 1'b1;
+	else if (upl_d && !ioctl_upload) dumping <= 1'b0;
+end
+wire dump_win = dumping && ioctl_addr[20:17] != 4'd0;
 always @(posedge clk_sys) begin
 	osd_d <= OSD_STATUS;
 	nvram_save <= 1'b0;
@@ -174,9 +197,9 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	// the .mra's <nvram index="4">: downloaded after the ROM, uploaded when
 	// nvram_save rises
 	.ioctl_upload(ioctl_upload),
-	.ioctl_upload_req(nvram_save),
+	.ioctl_upload_req(nvram_save | dump_pulse),
 	.ioctl_upload_index(8'd4),
-	.ioctl_din(nv_rdata),
+	.ioctl_din(dump_win ? (ioctl_addr[0] ? dbg_mem_data[15:8] : dbg_mem_data[7:0]) : nv_rdata),
 	.ioctl_rd(),
 
 	.joystick_0(joystick_0),
@@ -526,7 +549,7 @@ ms32_core u_core (
 	.DDRAM_DOUT_READY(c_dout_ready & ~ldr_active), .DDRAM_RD(k_rd), .DDRAM_DIN(k_din), .DDRAM_BE(k_be), .DDRAM_WE(k_we),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(core_vblank_ev),
-	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]),
+	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]), .dis_road(status[85]),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .road_overrun(road_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
 	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_road_ovr_ev(dbg_road_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles),
@@ -551,20 +574,24 @@ ms32_sound u_sound (
 
 `ifdef DEBUG_ISSP
 // A window on the video RAMs, read over JTAG by scripts/dump_ram.py: source
-// [19:0] = {enable, region[2:0], address[15:0]}, probe = the 16-bit word.
+// [20:0] = {dump, enable, region[2:0], address[15:0]}, probe = the 16-bit word.
 // scripts/render_model.py then renders the board's own RAM, which is the only
 // way to tell "the RTL is wrong" from "the RAM is wrong". While the enable is
 // held the read ports are taken over and the picture is garbage, so the game
 // wants pausing first.
-wire        dbg_mem_en;
-wire [2:0]  dbg_mem_reg;
-wire [15:0] dbg_mem_addr;
-wire [15:0] dbg_mem_data;
-wire [19:0] memwin_src;
-assign {dbg_mem_en, dbg_mem_reg, dbg_mem_addr} = memwin_src;
+wire [20:0] memwin_src;
+wire [2:0]  win_reg  = memwin_src[18:16];
+wire [15:0] win_addr = memwin_src[15:0];
+wire [3:0]  dump_slot = ioctl_addr[20:17] - 4'd1;
+assign dump_req = memwin_src[20];
+// While the HPS is streaming a dump out, the window follows the upload
+// address instead of the one JTAG set (layout above: word in bits 16:1).
+assign dbg_mem_en   = memwin_src[19] | dump_win;
+assign dbg_mem_reg  = dump_win ? dump_slot[2:0]   : win_reg;
+assign dbg_mem_addr = dump_win ? ioctl_addr[16:1] : win_addr;
 altsource_probe #(
 	.sld_auto_instance_index("YES"), .instance_id("D"),
-	.probe_width(16), .source_width(20), .source_initial_value("0"),
+	.probe_width(16), .source_width(21), .source_initial_value("0"),
 	.enable_metastability("NO"), .lpm_type("altsource_probe")
 ) u_memwin (
 	.probe(dbg_mem_data), .source(memwin_src), .source_clk(clk_sys), .source_ena(1'b1)
@@ -601,6 +628,11 @@ issp_video_probe #(.INSTANCE_ID("V")) u_issp_v (
 	.road_row(dbg_road_row), .road_rowword(dbg_road_rowword),
 	.road_starty(dbg_road_starty), .road_offsy(dbg_road_offsy)
 );
+`else
+assign dump_req = 1'b0;
+assign dbg_mem_en = 1'b0;
+assign dbg_mem_reg = 3'd0;
+assign dbg_mem_addr = 16'd0;
 `endif
 
 // CRT adjust (rtl/video/ms32_crt.sv): H-Size, H-Position, V-Shift on the

@@ -66,5 +66,5 @@
       <part name="mr92042-01.22" crc="0fa26f65"/>
       <part name="mr95024-05.23" crc="57502a17"/>
   </rom>
-  <nvram index="4" size="8192"/>
+  <nvram index="4" size="1179648"/>
 </misterromdescription>

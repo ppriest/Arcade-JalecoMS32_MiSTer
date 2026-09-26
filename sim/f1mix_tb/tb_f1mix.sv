@@ -2,7 +2,7 @@
 //
 //  F-1 Super Battle's video path against MAME's own screenshot: ms32_crtc
 //  driving the two ms32_lineplane engines and the two ms32_tilemap engines,
-//  mixed by ms32_mixer_f1 through the capture's priority and palette RAMs.
+//  mixed by ms32_mixer (F1) through the capture's priority and palette RAMs.
 //
 //  The sprite engine is not here -- it is the same one the other twenty-one
 //  sets use and is checked by capload_tb -- so the sprite word per dot comes
@@ -157,7 +157,7 @@ wire [15:0] spr_w = (v_active && h_active && vcnt < 224 && hcnt < 320)
                   ? sprword[vcnt * 320 + hcnt] : 16'd0;
 
 wire [7:0] vr, vg, vb;
-ms32_mixer_f1 u_mix (
+ms32_mixer #(.F1(1'b1)) u_mix (
 	.clk(clk), .reset(reset),
 	.tx_pen(tx_pen),   .tx_col(tx_col),   .tx_op(tx_op),
 	.bg_pen(bg_pen),   .bg_col(bg_col),   .bg_op(bg_op),
@@ -166,7 +166,7 @@ ms32_mixer_f1 u_mix (
 	.roz_line(rz_lcol), .road_line(rd_lcol), .spr(spr_w),
 	.pri_addr(pri_addr), .pri_data(pri_data),
 	.pal_addr(pal_addr), .pal_w0(pal_w0), .pal_w1(pal_w1),
-	.brt0(16'd0), .brt1(16'd0),
+	.brt0(16'd0), .brt1(16'd0), .brt2(16'd0), .brt3(16'd0),
 	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0), .dis_road(1'b0),
 	.r(vr), .g(vg), .b(vb)
 );

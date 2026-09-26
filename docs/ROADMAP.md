@@ -277,13 +277,18 @@ to reach full black, because `kirarast`'s attract mode depends on it not doing s
 brightness "breaks other games in various places". Treat the whole brightness path as a known
 divergence to be measured against captures, not as a modelled mechanism.
 
-**Mixing is the least-known part of the hardware.** The driver's own first line is "hardware tests
-are needed to establish how the mixing really works". The 0x2000-byte priority RAM is clearly a
-lookup table; MAME probes eight fixed addresses of the form `spritepri | 0x0a00 | 0x1500` to build an
-8-bit `primask`, derives three layer priorities from three more fixed probes
-(`0x2b00`, `0x2e00`, `0x3a00`), and then runs a per-pixel if-else chain that the source itself labels
-"spaghetti code", "complete guesswork and missing many spots". Whatever the real chip does, MAME's
-output is the only reference available.
+**Mixing is the least-known part of the hardware.** The 0x2000-byte priority RAM is a lookup
+table. Up to MAME PR 16135 the driver probed eleven fixed addresses of it and ran a per-pixel case
+chain it labelled "complete guesswork"; PR 16243 replaces that for every set with the lookup
+f1superb's mixer had: a 13-bit index per pixel (which layers are opaque, the sprite's priority, a
+line depth) whose byte picks the layer, a brightness bank and a glow or half-brightness flag.
+`rtl/video/ms32_mixer.sv` follows the PR, with `F1=1` for f1superb (which the PR leaves without
+brightness). Not in the RTL: the PR's second pass, `apply_sprite_effects()`, which redoes the lookup
+inside sprite boxes where no sprite pen is opaque; it needs box coverage the sprite frame buffer does
+not store, and it changed no pixel in any of the captures (`render_model.py` counts them). As
+written it always looks up priority 0 -- it stores `(1 + (attr & 0xf0)) << 8` and recovers
+`((v >> 8) - 1) & 0xf` -- so coverage reduces to one bit per pixel. MAME's output is still the
+only reference available.
 
 ### Sound
 
@@ -864,8 +869,7 @@ with 39,592 ALMs, and adding the road-plane and FPU probes (315 ALMs) put seeds 
 and -0.184 on that same clock. It is the framework scaler's path, not this core's, and what fails is
 routing under congestion. Two RAM blocks and 2,000 ALMs are left, so anything further added here has
 to pay for itself; the probes are the obvious thing to drop in a release build. `build_staged.py`'s presence check is now per-revision, since `ms32_roz`
-and `ms32_mixer` are legitimately absent here and `ms32_lineplane`, `ms32_mixer_f1` and `jalfpu`
-must be present instead.
+is legitimately absent here and `ms32_lineplane` and `jalfpu` must be present instead.
 
 ### What the hardware costs
 
@@ -977,10 +981,9 @@ that can go stale -- it is not checked.
    fit in 6,144 clocks at latency 20. That would take a second outstanding request, which is a
    change to the memory stack rather than to this engine. Until then the horizon line shows late
    under heavy contention, and the probe counts it.
-5. **Priority RAM mixing. Done.** `rtl/video/ms32_mixer_f1.sv` forms MAME's 13-bit index per dot
-   and reads the priority RAM's spare port, then selects the layer, the backdrop or nothing and
-   halves the brightness on bit 2 clear. It is a separate module from `ms32_mixer`, which keeps the
-   three probes and the case table the other 21 sets use; nothing about them changes.
+5. **Priority RAM mixing. Done.** `rtl/video/ms32_mixer.sv` (`F1=1`) forms MAME's 13-bit index per
+   dot and reads the priority RAM's spare port, then selects the layer, the backdrop or nothing and
+   halves the brightness on bit 2 clear. Since PR 16243 the other 21 sets use the same lookup.
 
    `sim/f1mix_tb` puts the whole video path together -- both line planes, both tilemaps, the mixer,
    the capture's priority and palette RAMs -- and compares against MAME's own screenshot:
@@ -1019,8 +1022,10 @@ transparent where `vram[2 row]` is zero.
 With the interrupts connected, measured over 719 frames: **4.3 FPU routines a
 frame**, longest routine 136,781 clk_cpu clocks (41% of a frame, so `CE_DIV = 2`
 is fast enough), **263 road lines drawn per frame**, no road-plane overrun, one
-late road line in 719 frames, and no road write outside the RAMs. A screenshot
-of the attract mode shows the car on tarmac.
+late road line in 719 frames, and no road write outside the RAMs. On the
+board the road still does not reach the screen, and parts of the cars show
+upside down (sprite attributes with flipy set, which MAME's object RAM never
+has in the same scenes -- `scripts/mame/flipcount.lua`). Both open.
 
 Two things that were *not* the fault, ruled out by measurement rather than
 argument, and worth recording because both looked plausible:
@@ -1030,8 +1035,8 @@ argument, and worth recording because both looked plausible:
   (f1superb: 78 drawn, 20 flipx, 63 zoomed; tetrisp-title, p47aces and gametngk:
   none at all), so the flip path had never been checked against anything.
   `sim/sprite_tb` on the f1superb capture: **71,680 of 71,680 pixels match the
-  model**. The engine is right; the flipping was the OSD's Rotation set to CCW
-  on a ROT0 set, saved in the core's own `.cfg`.
+  model**. The engine draws what the object RAM says; the flipped sprites come
+  from attributes that carry flipy, so the question is upstream of it.
 - **Road RAM aliasing.** The RAMs are sized to measured use with the decode
   wrapping, so a write past 0x1BF or 0x7FF would alias silently. The counter
   reads 0.

@@ -22,7 +22,7 @@
 // the byte offset inside the 0xFCE00000 block and vreg_data the low
 // halfword the CPU wrote (every register here is 16-bit behind umask32):
 //   0x000-0x011  sysctrl CRTC (ms32_crtc)         0x200-0x27F  sprite control
-//   0x280/0x284  brightness                       0x600-0x65F  ROZ control
+//   0x280-0x28C  brightness                       0x600-0x65F  ROZ control
 //   0x800-0x85F  road plane control (F1SUPERB)
 //   0xA00-0xA17  TX scroll   0xA20-0xA37 BG scroll   0xA7C bgmode
 //
@@ -88,7 +88,7 @@ module ms32_video (
 	output logic        timer_enable,
 
 	// OSD
-	input  logic        dis_tx, dis_bg, dis_roz, dis_spr,
+	input  logic        dis_tx, dis_bg, dis_roz, dis_spr, dis_road,
 
 	// debug
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
@@ -126,15 +126,17 @@ module ms32_video (
 	logic [15:0] roz_ctrl  [0:23];
 	logic [15:0] road_ctrl [0:23];   // F1SUPERB, 0xFCE00800
 	logic [15:0] spr_ctrl10;
-	logic [15:0] brt0, brt1;
+	logic [15:0] brt0, brt1, brt2, brt3;
 	logic        bgmode;
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			// MAME's video_start defaults, "tp2m32 doesn't set the brightness
 			// registers so we need sensible defaults" (ms32_v.cpp 82-84): the
 			// brightness pair 0xFFFF and sprite control 0x10 = 0x8000 (list
-			// walked 0->tail). tp2m32 never writes either.
-			bgmode <= 1'b0; brt0 <= 16'hFFFF; brt1 <= 16'hFFFF; spr_ctrl10 <= 16'h8000;
+			// walked 0->tail). tp2m32 never writes either. Bank 1 starts at
+			// factor 0x100 (m_brt1_* in video_start), i.e. registers 0.
+			bgmode <= 1'b0; brt0 <= 16'hFFFF; brt1 <= 16'hFFFF; brt2 <= 16'h0000; brt3 <= 16'h0000;
+			spr_ctrl10 <= 16'h8000;
 		end else if (vreg_we) begin
 			if (vreg_off[11:5] == 7'b1010_000 && vreg_off[4:2] < 3'd6) tx_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA00-0xA17
 			if (vreg_off[11:5] == 7'b1010_001 && vreg_off[4:2] < 3'd6) bg_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA20-0xA37
@@ -144,6 +146,8 @@ module ms32_video (
 			if (vreg_off == 12'h210) spr_ctrl10 <= vreg_data;
 			if (vreg_off == 12'h280) brt0 <= vreg_data;
 			if (vreg_off == 12'h284) brt1 <= vreg_data;
+			if (vreg_off == 12'h288) brt2 <= vreg_data;
+			if (vreg_off == 12'h28C) brt3 <= vreg_data;
 		end
 	end
 	wire crtc_we = vreg_we && (vreg_off[11:6] == 6'd0) && (vreg_off[5:2] <= 4'd8);
@@ -182,22 +186,6 @@ module ms32_video (
 	// says the fault is upstream of the plane, not in it.
 	assign dbg_road_starty = road_ctrl[2];
 	assign dbg_road_offsy  = road_ctrl[13];
-
-	// 0 road map, 1 road line RAM, 2 road_ctrl, 3 priority RAM, 4 ROZ map,
-	// 5 ROZ line RAM, 6 TX map, 7 palette (even words in the low half of the
-	// pair, odd in the high -- both halves come back at once).
-	always_ff @(posedge clk) begin
-		case (dbg_mem_reg)
-			3'd0: dbg_mem_data <= road_vd;
-			3'd1: dbg_mem_data <= road_ld;
-			3'd2: dbg_mem_data <= road_ctrl[dbg_mem_addr[4:0] < 5'd24 ? dbg_mem_addr[4:0] : 5'd0];
-			3'd3: dbg_mem_data <= {8'd0, pri_data};
-			3'd4: dbg_mem_data <= roz_vd;
-			3'd5: dbg_mem_data <= roz_ld;
-			3'd6: dbg_mem_data <= tx_vd;
-			3'd7: dbg_mem_data <= dbg_mem_addr[15] ? pal_w1 : pal_w0;
-		endcase
-	end
 
 	logic road_line_drawn, road_pen_nz;
 	logic [15:0] road_lines_n, road_pens_n;
@@ -384,9 +372,33 @@ module ms32_video (
 	dpram_dc #(.ADDR_WIDTH(13), .DATA_WIDTH(8)) u_priram (.clk_a(cpu_clk), .a_addr(priram_addr), .a_wel(priram_we), .a_weh(1'b0), .a_wdata(cpu_wdata[7:0]), .a_rdata(priram_rdata),
 		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[12:0] : pri_addr), .b_re(1'b1), .b_rdata(pri_data));
 
+	// the JTAG window's read side (MS32.sv):
+	// 0 road map, 1 road line RAM, 2 road_ctrl, 3 priority RAM, 4 ROZ map,
+	// 5 ROZ line RAM, 6 TX map, 7 palette (even words in the low half of the
+	// pair, odd in the high -- both halves come back at once).
+	// Combinational, not registered: the RAM outputs are already one clock
+	// behind their address, and the upload path needs the byte ready in that
+	// same clock, exactly as the NVRAM read does.
+	always_comb begin
+		case (dbg_mem_reg)
+			3'd0: dbg_mem_data = road_vd;
+			3'd1: dbg_mem_data = road_ld;
+			3'd2: dbg_mem_data = road_ctrl[dbg_mem_addr[4:0] < 5'd24 ? dbg_mem_addr[4:0] : 5'd0];
+			3'd3: dbg_mem_data = {8'd0, pri_data};
+			3'd4: dbg_mem_data = roz_vd;
+			3'd5: dbg_mem_data = roz_ld;
+			3'd6: dbg_mem_data = tx_vd;
+			3'd7: dbg_mem_data = dbg_mem_addr[15] ? pal_w1 : pal_w0;
+		endcase
+	end
+
+	assign bad_primask = 1'b0;      // the priority-RAM mixer has no unhandled case
 `ifdef F1SUPERB
-	assign bad_primask = 1'b0;      // F-1 Super Battle's mixer has no unhandled case
-	ms32_mixer_f1 u_mix (
+	localparam bit MIX_F1 = 1'b1;
+`else
+	localparam bit MIX_F1 = 1'b0;
+`endif
+	ms32_mixer #(.F1(MIX_F1)) u_mix (
 		.clk(clk), .reset(reset),
 		.tx_pen(tx_pen), .tx_col(tx_col), .tx_op(tx_op),
 		.bg_pen(bg_pen), .bg_col(bg_col), .bg_op(bg_op),
@@ -396,23 +408,9 @@ module ms32_video (
 		.spr(spr_pix),
 		.pri_addr(pri_addr), .pri_data(pri_data),
 		.pal_addr(pal_addr), .pal_w0(pal_w0), .pal_w1(pal_w1),
-		.brt0(brt0), .brt1(brt1),
-		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr), .dis_road(1'b0),
+		.brt0(brt0), .brt1(brt1), .brt2(brt2), .brt3(brt3),
+		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr), .dis_road(dis_road),
 		.r(r), .g(g), .b(b)
 	);
-`else
-	ms32_mixer u_mix (
-		.clk(clk), .reset(reset), .frame_start(vblank_ev),
-		.tx_pen(tx_pen), .tx_col(tx_col), .tx_op(tx_op),
-		.bg_pen(bg_pen), .bg_col(bg_col), .bg_op(bg_op),
-		.roz_pen(roz_pen), .roz_col(roz_col), .roz_op(roz_op),
-		.spr(spr_pix),
-		.pri_addr(pri_addr), .pri_data(pri_data),
-		.pal_addr(pal_addr), .pal_w0(pal_w0), .pal_w1(pal_w1),
-		.brt0(brt0), .brt1(brt1),
-		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr),
-		.r(r), .g(g), .b(b), .unhandled_primask(bad_primask)
-	);
-`endif
 
 endmodule

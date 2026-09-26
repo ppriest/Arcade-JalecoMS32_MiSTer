@@ -19,7 +19,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/sdram_narrow_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_sdram_top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/jalfpu/jalfpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_lineplane.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_mixer_f1.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_crtc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_tilemap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/ms32_roz.sv

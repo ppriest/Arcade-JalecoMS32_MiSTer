@@ -1943,6 +1943,22 @@ Rule: every `read_text`/`write_text`/`open` on a repo file names
 `encoding="utf-8"`. A patch script that touches several files checks them
 all in first, or it is not atomic.
 
+### [MS32] Every core stuck at once is the board, not the build -- power-cycle it
+
+A freshly deployed F1 build showed one flat colour on both its .mras, and
+the V probe read `frames` 0 and V70 fetch wait 0: nothing had left reset.
+It looked like a regression. The previous F1 bitstream, which had run, and
+the main core's Tetris Plus from days earlier failed the same way, with the
+PLL locked and the download complete. The MiSTer had been rebooted an hour
+before; a full power-off (unplugged) fixed every core. This is a known issue
+of this core (Readme, Status): now and then it leaves the board this way.
+Cause not found; both CPU gates these cores share -- the DDR3-to-SDRAM ROM
+copy and the SDRAM -- are board state that survives a core reload and a
+`reboot`, which makes them the first suspects.
+
+Rule: when a new build does not start, load an older known-good one before
+debugging the new one. If that fails too, power-cycle the board first.
+
 
 ## Tooling and workflow (Quartus, ModelSim, and the shell around them)
 

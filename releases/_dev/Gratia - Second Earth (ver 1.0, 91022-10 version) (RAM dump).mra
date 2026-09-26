@@ -3,8 +3,8 @@
      rtl/memory/ms32_sdram_top.sv's map. Regions are filled by repeating the
      ROM data to the region size (MAME's tile-number wrap). -->
 <misterromdescription>
-  <name>Gratia - Second Earth (ver 1.0, 92047-01 version)</name>
-  <setname>gratia</setname>
+  <name>Gratia - Second Earth (ver 1.0, 91022-10 version)</name>
+  <setname>gratiaa</setname>
   <year>1996</year>
   <manufacturer>Jaleco</manufacturer>
   <rbf>JalecoMS32</rbf>
@@ -23,8 +23,8 @@
     <dip name="FBI Logo" bits="22" ids="Yes,No"/>
     <dip name="Language" bits="23" ids="English,Japanese"/>
   </switches>
-  <rom index="1"><part>02</part></rom>   <!-- mod byte: key ss92047_01 -->
-  <rom index="0" zip="gratia.zip" md5="none" address="0x30000000">
+  <rom index="1"><part>00</part></rom>   <!-- mod byte: key ss91022_10 -->
+  <rom index="0" zip="gratiaa.zip|gratia.zip" md5="none" address="0x30000000">
     <!-- maincpu: 0x200000 bytes at 0x0, repeated 1x -->
       <interleave output="32">
         <part name="94019_29_ver1.0.29" crc="8059800b" map="0001"/>
@@ -33,10 +33,10 @@
         <part name="94019_26_ver1.0.26" crc="f398cba5" map="1000"/>
       </interleave>
     <!-- txtiles: 0x80000 bytes at 0x200000, repeated 1x -->
-      <part name="94019_2.030" crc="f9543fcf"/>
+      <part name="94019_30ver1.0.30" crc="026b5379"/>
     <!-- bgtiles: 0x200000 bytes at 0x280000, repeated 2x -->
-      <part name="94019_2.07" crc="043f969b"/>
-      <part name="94019_2.07" crc="043f969b"/>
+      <part name="mr94019-07.10" crc="561a786b"/>
+      <part name="mr94019-07.10" crc="561a786b"/>
     <!-- roztiles: 0x400000 bytes at 0x680000, repeated 1x -->
       <part name="mr94019-08.11" crc="abd124e0"/>
       <part name="mr94019-09.12" crc="711ab08b"/>
@@ -60,5 +60,5 @@
       <part name="mr92042-01.22" crc="0fa26f65"/>
       <part name="mr94019-10.23" crc="a751e316"/>
   </rom>
-  <nvram index="4" size="8192"/>
+  <nvram index="4" size="1179648"/>
 </misterromdescription>

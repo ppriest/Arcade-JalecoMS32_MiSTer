@@ -72,7 +72,7 @@ module ms32_core (
 	output logic [7:0]  r, g, b,
 	output logic        vblank_ev,
 
-	input  logic        dis_tx, dis_bg, dis_roz, dis_spr,
+	input  logic        dis_tx, dis_bg, dis_roz, dis_spr, dis_road,
 
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
 	output logic        road_overrun,                            // F1SUPERB: the road line plane
@@ -177,7 +177,7 @@ module ms32_core (
 		.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
 		.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 		.vblank_ev(vblank_ev), .field_ev(field_ev), .timer_enable(),
-		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr),
+		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr), .dis_road(dis_road),
 		.tx_overrun(tx_overrun), .bg_overrun(bg_overrun), .roz_overrun(roz_overrun), .road_overrun(road_overrun), .dbg_road_lines(dbg_road_lines), .dbg_road_pens(dbg_road_pens),
 		.dbg_spr_flipx(dbg_spr_flipx), .dbg_spr_flipy(dbg_spr_flipy),
 		.dbg_fy_attr(dbg_fy_attr), .dbg_fy_idx(dbg_fy_idx),

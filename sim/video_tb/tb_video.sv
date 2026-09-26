@@ -88,7 +88,8 @@ ms32_video u_video (
 	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(vblank_ev), .field_ev(), .timer_enable(),
-	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0),
+	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0), .dis_road(1'b0),
+	.dbg_mem_en(1'b0), .dbg_mem_reg(3'd0), .dbg_mem_addr(16'd0), .dbg_mem_data(),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.spr_frame_cycles(spr_cycles), .spr_drawn(spr_drawn)
 );
@@ -300,24 +301,26 @@ initial begin
 	fd = $fopen({"debug/", CAP, "/", GAME, "_sprctrl.bin"}, "rb");  n = $fread(tmp, fd); $fclose(fd); write_regs(12'h200, 32);
 	// brightness: the last values in the write log, when there is one
 	begin : brt
-		integer wl, fr, ln, ad, mk, dt, pc, b0, b1;
-		b0 = 0; b1 = 0;
+		integer wl, fr, ln, ad, mk, dt, pc;
+		reg [15:0] bw [0:3];
+		bw[0] = 0; bw[1] = 0; bw[2] = 0; bw[3] = 0;
 		wl = $fopen({"debug/", CAP, "/", GAME, "_writes.log"}, "r");
 		if (wl) begin
 			while (!$feof(wl)) begin
-				if ($fscanf(wl, "%d %d %h %h %h %h\n", fr, ln, ad, mk, dt, pc) == 6) begin
-					if (ad == 32'hFCE00280) b0 = dt;
-					if (ad == 32'hFCE00284) b1 = dt;
+				if ($fscanf(wl, "%d %d %h %h %h %h
+", fr, ln, ad, mk, dt, pc) == 6) begin
+					if (ad >= 32'hFCE00280 && ad <= 32'hFCE0028C && ad[1:0] == 2'd0) bw[ad[3:2]] = dt[15:0];
 				end else begin
 					void'($fgets(tmp_line, wl));
 				end
 			end
 			$fclose(wl);
 		end
-		@(posedge clk); vreg_we <= 1; vreg_off <= 12'h280; vreg_data <= b0[15:0];
-		@(posedge clk); vreg_off <= 12'h284; vreg_data <= b1[15:0];
+		for (int k = 0; k < 4; k++) begin
+			@(posedge clk); vreg_we <= 1; vreg_off <= 12'h280 + 12'(4 * k); vreg_data <= bw[k];
+		end
 		@(posedge clk); vreg_we <= 0;
-		$display("%s: brightness %04x %04x, LAT %0d, DDR busy %0d lat %0d", CAP, b0[15:0], b1[15:0], LAT, DDR_BUSY, DDR_LAT);
+		$display("%s: brightness %04x %04x %04x %04x, LAT %0d, DDR busy %0d lat %0d", CAP, bw[0], bw[1], bw[2], bw[3], LAT, DDR_BUSY, DDR_LAT);
 	end
 
 	wait (frame == 4);

@@ -120,6 +120,9 @@ from `ROM_START`.
 Initial release. Much untested.
 
 * World PK Soccer V2 has an issue with the kick/ball interface and errors in-game
+* Now and then the core leaves the MiSTer in a state where no MS32 game starts (a blank screen
+  in one colour), on this build or any earlier one, until the board is power-cycled; a
+  `reboot` is not enough. Cause not found.
 * The Game Paradise: against footage of the real board
   ([PCB #7 The Game Paradise! (Game Tengoku)](https://www.youtube.com/watch?v=GCWV1hdBEBc)), the
   graphics are not authentic in places, the shadows especially. The ship standing still in the

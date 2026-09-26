@@ -58,5 +58,5 @@
       <part name="mr96019-05.22" crc="74aa5c31"/>
       <part repeat="0x200000">00</part>
   </rom>
-  <nvram index="4" size="8192"/>
+  <nvram index="4" size="1179648"/>
 </misterromdescription>

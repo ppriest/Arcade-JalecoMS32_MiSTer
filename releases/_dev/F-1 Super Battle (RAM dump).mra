@@ -84,5 +84,5 @@
         <part name="f1sb8.bin" crc="ba3f1533" map="2100"/>
       </interleave>
   </rom>
-  <nvram index="4" size="8192"/>
+  <nvram index="4" size="1179648"/>
 </misterromdescription>

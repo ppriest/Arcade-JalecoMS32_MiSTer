@@ -130,11 +130,11 @@ REQUIRED_INSTANCES = (
 )
 
 # MS32F1 is the same design with F1SUPERB defined: the ROZ plane is replaced by
-# two line planes and the mixer by the priority-RAM one, so those two names are
-# legitimately absent and three more must be there instead.
+# two line planes, so that name is legitimately absent and two more must be
+# there instead.
 _F1_INSTANCES = (
     "ms32_crtc", "ms32_tilemap", "ms32_sprite", "ms32_sprite_fb",
-    "ms32_lineplane", "ms32_mixer_f1", "jalfpu",
+    "ms32_lineplane", "ms32_mixer", "jalfpu",
 )
 REQUIRED_INSTANCES_BY_REV = {"MS32F1": _F1_INSTANCES, "MS32F1_stp": _F1_INSTANCES}
 
