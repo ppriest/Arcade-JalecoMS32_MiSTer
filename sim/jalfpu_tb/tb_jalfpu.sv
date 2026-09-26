@@ -40,7 +40,8 @@ module tb_jalfpu;
 		.h_rdata(h_rdata), .h_valid(h_valid), .irq(irq),
 		.dbg_stall(stall), .dbg_retire(retire), .dbg_ppc(ppc), .dbg_op(op),
 		.dbg_s(sregs), .dbg_c6(c6), .dbg_c7(c7), .dbg_sign(sign),
-		.dbg_flags(flags), .dbg_sp(sp)
+		.dbg_flags(flags), .dbg_sp(sp),
+		.dbg_ren(1'b0), .dbg_raddr(12'd0), .dbg_rdata()
 	);
 
 	// ------------------------------------------------------------ host access

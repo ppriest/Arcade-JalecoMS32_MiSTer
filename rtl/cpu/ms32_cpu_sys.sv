@@ -112,6 +112,28 @@ module ms32_cpu_sys #(
 	output logic [15:0] dbg_road_vw, dbg_road_lw,   // F1SUPERB: road map / line RAM writes
 	output logic [19:0] dbg_fpu_max,                 // F1SUPERB: longest FPU routine, clk_cpu clocks
 	output logic [15:0] dbg_fpu_runs,                // F1SUPERB: FPU routines started
+	// F1SUPERB, per FPU, wrapping, clk_cpu: {starts1, starts0, irqs1, irqs0,
+	// host writes1, host reads1, host writes0, host reads0}, 16 bits each
+	output logic [127:0] dbg_fpu_cnt,
+	// per field pass (field event to field event), clk_cpu: {field events,
+	// writes to FEE10000, road line RAM writes in the last pass, highest and
+	// lowest road line written in it}; 16/16/16/8/8 bits, counts wrapping
+	output logic [63:0] dbg_pass,
+	// F1SUPERB: V70 writes to FPU0's data RAM or registers that land while
+	// FPU0 is running a routine (MAME: none), wrapping
+	output logic [15:0] dbg_fpu_ovl,
+	// the JTAG window on the two FPUs' data RAMs (clk_sys side, held static
+	// while it is read): en, 0 = FPU0 / 1 = FPU1, word
+	input  logic        dbg_fpu_ren,
+	input  logic        dbg_fpu_sel,
+	input  logic [11:0] dbg_fpu_raddr,
+	output logic [15:0] dbg_fpu_rdata,
+	// per-chain hashes of the V70's FPU0 traffic (JTAG window region 10):
+	// word 2k = writes hash of chain k, 2k+1 = reads hash; chain count
+	input  logic [9:0]  dbg_hash_raddr,
+	output logic [15:0] dbg_hash_rdata,
+	output logic [15:0] dbg_chains,
+	output logic [31:0] dbg_pre,        // {count, hash} of FPU0 writes before chain 0
 	// F1SUPERB: the analog controls, already in clk_cpu
 	input  logic [7:0]  analog_wheel,
 	input  logic [7:0]  analog_accel,
@@ -428,22 +450,100 @@ module ms32_cpu_sys #(
 	wire         fpu_valid = (fpu_valid0 | fpu_valid1);
 	wire         fpu_irq0, fpu_irq1;
 	wire         fpu_busy0, fpu_busy1;
+	logic [15:0] fpu_dbg0, fpu_dbg1;
 `ifdef F1SUPERB
 	jalfpu u_fpu0 (
 		.clk(clk_cpu), .rst(rst),
 		.h_req(fpu_req && is_fpu0), .h_we(fpu_we), .h_addr(a[14:0]), .h_wdata(m_wdata[15:0]),
 		.h_rdata(fpu_rdata0), .h_valid(fpu_valid0), .irq(fpu_irq0), .busy(fpu_busy0),
 		.dbg_stall(1'b0), .dbg_retire(), .dbg_ppc(), .dbg_op(), .dbg_s(),
-		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp()
+		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp(),
+		.dbg_ren(dbg_fpu_ren && !dbg_fpu_sel), .dbg_raddr(dbg_fpu_raddr), .dbg_rdata(fpu_dbg0)
 	);
 	jalfpu u_fpu1 (
 		.clk(clk_cpu), .rst(rst),
 		.h_req(fpu_req && is_fpu1), .h_we(fpu_we), .h_addr(a[14:0]), .h_wdata(m_wdata[15:0]),
 		.h_rdata(fpu_rdata1), .h_valid(fpu_valid1), .irq(fpu_irq1), .busy(fpu_busy1),
 		.dbg_stall(1'b0), .dbg_retire(), .dbg_ppc(), .dbg_op(), .dbg_s(),
-		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp()
+		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp(),
+		.dbg_ren(dbg_fpu_ren && dbg_fpu_sel), .dbg_raddr(dbg_fpu_raddr), .dbg_rdata(fpu_dbg1)
 	);
-	assign fpu_rdata = fpu_valid0 ? fpu_rdata0 : fpu_rdata1;
+	// By address, not by h_valid: h_valid is a one-clock pulse, and B_ACK
+	// takes the data the clock after it, when a valid-selected mux had already
+	// swung to FPU1 -- every V70 read of FPU0 returned FPU1's last answer. Each
+	// FPU holds h_rdata until its next access, and the address holds for this one.
+	assign fpu_rdata = is_fpu0 ? fpu_rdata0 : fpu_rdata1;
+	assign dbg_fpu_rdata = dbg_fpu_sel ? fpu_dbg1 : fpu_dbg0;
+
+	// Per FPU: routines started (busy rising), interrupts raised (irq rising),
+	// and the V70's completed accesses to each window, reads and writes apart.
+	// MAME, driving (frames 4001-4200): 4 starts per FPU every other frame.
+	// They wrap rather than saturate: FPU0's reads pass 65,535 inside a
+	// couple of minutes, and a rate needs two polls to difference.
+	logic [15:0] c_st0, c_st1, c_irq0, c_irq1, c_rd0, c_wr0, c_rd1, c_wr1;
+	logic        busy0_d, busy1_d, irq0_d, irq1_d;
+	function automatic logic [15:0] inc(input logic [15:0] v, input logic e);
+		inc = v + {15'd0, e};
+	endfunction
+	wire fpu_done = (bst == B_FPU) && fpu_valid;
+	always_ff @(posedge clk_cpu) begin
+		busy0_d <= fpu_busy0; busy1_d <= fpu_busy1; irq0_d <= fpu_irq0; irq1_d <= fpu_irq1;
+		if (rst) begin
+			c_st0 <= '0; c_st1 <= '0; c_irq0 <= '0; c_irq1 <= '0; c_rd0 <= '0; c_wr0 <= '0; c_rd1 <= '0; c_wr1 <= '0;
+		end else begin
+			c_st0  <= inc(c_st0,  fpu_busy0 && !busy0_d);
+			c_st1  <= inc(c_st1,  fpu_busy1 && !busy1_d);
+			c_irq0 <= inc(c_irq0, fpu_irq0 && !irq0_d);
+			c_irq1 <= inc(c_irq1, fpu_irq1 && !irq1_d);
+			c_rd0  <= inc(c_rd0,  fpu_done && is_fpu0 && !fpu_we);
+			c_wr0  <= inc(c_wr0,  fpu_done && is_fpu0 &&  fpu_we);
+			c_rd1  <= inc(c_rd1,  fpu_done && is_fpu1 && !fpu_we);
+			c_wr1  <= inc(c_wr1,  fpu_done && is_fpu1 &&  fpu_we);
+		end
+	end
+	assign dbg_fpu_cnt = {c_st1, c_st0, c_irq1, c_irq0, c_wr1, c_rd1, c_wr0, c_rd0};
+
+	// Where the board first parts from MAME. FPU0 runs a chain of four
+	// routines per field pass (338, 38B, 20D, 237), and a V70 write of 0x338
+	// to its PC starts one. Per-chain hashes of the V70's FPU0 traffic (1b0bb80)
+	// showed the writes equal to MAME's for 53 chains and the reads different
+	// from chain 0: same inputs, other answers. So now:
+	//   - the first 512 V70 reads of FPU0 from chain 0 on, {index, data} each
+	//     (JTAG window region 10: word 2k = data, 2k+1 = dword index);
+	//   - a hash and a count of every V70 write to FPU0 before chain 0 (the
+	//     program and data upload), h' = rotl1(h) ^ data ^ (index << 3).
+	// scripts/mame/fpureads.lua gives MAME's side.
+	logic [15:0] chains, hpre, npre;
+	logic [9:0]  rl_n;
+	logic [31:0] rl_mem [0:511];
+	wire [12:0] f0_x = a[14:2];
+	wire        chain_start = fpu_done && is_fpu0 && fpu_we && (a[14:0] == 15'h24C0) && (m_wdata[9:0] == 10'h338);
+	always_ff @(posedge clk_cpu) begin
+		if (rst) begin
+			chains <= '0; hpre <= '0; npre <= '0; rl_n <= '0;
+		end else if (fpu_done && is_fpu0) begin
+			if (chain_start) chains <= chains + 16'd1;
+			if (fpu_we && chains == 16'd0 && !chain_start) begin
+				hpre <= {hpre[14:0], hpre[15]} ^ m_wdata[15:0] ^ {f0_x, 3'b000};
+				npre <= npre + 16'd1;
+			end
+			if (!fpu_we && chains != 16'd0 && !rl_n[9]) begin
+				rl_mem[rl_n[8:0]] <= {3'd0, f0_x, fpu_rdata};
+				rl_n <= rl_n + 10'd1;
+			end
+		end
+	end
+	logic [31:0] rl_q;
+	always_ff @(posedge clk_cpu) rl_q <= rl_mem[dbg_hash_raddr[9:1]];
+	assign dbg_hash_rdata = dbg_hash_raddr[0] ? rl_q[31:16] : rl_q[15:0];
+	assign dbg_chains = chains;
+	assign dbg_pre = {npre, hpre};
+	// host data (below 0x2400) or register (0x2400-0x24ff) writes, not the
+	// program RAM, while the routine runs
+	wire fpu0_inwr = fpu_done && is_fpu0 && fpu_we && (a[14:0] < 15'h2500);
+	always_ff @(posedge clk_cpu)
+		if (rst) dbg_fpu_ovl <= '0;
+		else if (fpu0_inwr && fpu_busy0) dbg_fpu_ovl <= dbg_fpu_ovl + 16'd1;
 
 	// How long the FPUs hold the game up. One counter over "either is busy":
 	// that is the window the V70 actually waits through, and against a frame
@@ -482,6 +582,12 @@ module ms32_cpu_sys #(
 	assign fpu_busy0  = 1'b0;
 	assign fpu_busy1  = 1'b0;
 	always_comb begin dbg_fpu_max = 20'd0; dbg_fpu_runs = 16'd0; end
+	assign dbg_fpu_cnt = '0;
+	assign dbg_fpu_ovl = '0;
+	assign dbg_hash_rdata = '0;
+	assign dbg_chains = '0;
+	assign dbg_pre = '0;
+	assign dbg_fpu_rdata = 16'd0;
 	wire [31:0] comms_q = 32'd0;
 `endif
 
@@ -589,5 +695,38 @@ module ms32_cpu_sys #(
 	);
 	assign vreg_off  = vreg_pay[27:16];
 	assign vreg_data = vreg_pay[15:0];
+
+	// ------------------------------------------------------------- debug: field passes
+	// f1superb's main loop idles on the halfword at FEE10000 until the field
+	// handler (level 9) decrements it, then clears it and does the frame's
+	// work -- the road line table among it, written by FFE19EC5-FFE19ED3 in one
+	// run per pass (MAME, second attract drive: lines 119-223, 420 writes,
+	// once every other frame). So per pass: the road line range and count, and
+	// the FEE10000 writes (one by the handler, one by the loop).
+	wire idle_flag_wr = wr && is_wram && (a[16:2] == 15'h4000) && |m_be[1:0];
+	wire road_lw_ev   = wr && is_roadl;
+	wire [7:0] road_line = a[12:5];
+	logic [15:0] p_fld, p_flag, p_cnt, p_cnt_last;
+	logic [7:0]  p_min, p_max, p_min_last, p_max_last;
+	always_ff @(posedge clk_cpu) begin
+		if (rst) begin
+			p_fld <= '0; p_flag <= '0; p_cnt <= '0; p_cnt_last <= '0;
+			p_min <= 8'hFF; p_max <= 8'h00; p_min_last <= 8'hFF; p_max_last <= 8'h00;
+		end else begin
+			if (idle_flag_wr) p_flag <= p_flag + 16'd1;
+			if (fld_cpu) begin
+				p_fld <= p_fld + 16'd1;
+				p_cnt_last <= p_cnt; p_min_last <= p_min; p_max_last <= p_max;
+				p_cnt <= {15'd0, road_lw_ev};
+				p_min <= road_lw_ev ? road_line : 8'hFF;
+				p_max <= road_lw_ev ? road_line : 8'h00;
+			end else if (road_lw_ev) begin
+				p_cnt <= p_cnt + 16'd1;
+				if (road_line < p_min) p_min <= road_line;
+				if (road_line > p_max) p_max <= road_line;
+			end
+		end
+	end
+	assign dbg_pass = {p_fld, p_flag, p_cnt_last, p_max_last, p_min_last};
 
 endmodule

@@ -145,14 +145,14 @@ wire        nv_written;
 // shape for arcade cores, and no game knowledge is needed.
 reg nvram_dirty = 1'b0, nvram_save = 1'b0, osd_d = 1'b0;
 // A RAM dump rides the NVRAM upload (DEBUG_ISSP builds, JTAG source D bit
-// 20): the .mra's <nvram size> decides how much the HPS takes and it lands in
+// 21): the .mra's <nvram size> decides how much the HPS takes and it lands in
 // config/nvram, for SFTP. File layout, 128 KB slots: slot 0 the NVRAM (so the
 // next launch loads a valid one back -- the loader takes the first 8 KB),
 // slot k+1 video-RAM window region k, k = 0..7; 1,179,648 bytes in all.
 // dumping holds from the request until the upload ends.
 wire        dump_req;
 wire        dbg_mem_en;
-wire [2:0]  dbg_mem_reg;
+wire [3:0]  dbg_mem_reg;
 wire [15:0] dbg_mem_addr;
 wire [15:0] dbg_mem_data;
 reg dumping = 1'b0, dump_d = 1'b0, dump_pulse = 1'b0, upl_d = 1'b0;
@@ -376,6 +376,11 @@ wire [11:0] dbg_fy_idx;
 wire [9:0]  dbg_road_row;
 wire [15:0] dbg_road_rowword, dbg_road_starty, dbg_road_offsy;
 wire [19:0] dbg_fpu_max;
+wire [127:0] dbg_fpu_cnt;
+wire [63:0]  dbg_pass;
+wire [15:0]  dbg_fpu_ovl;
+wire [15:0]  dbg_chains;
+wire [31:0]  dbg_pre;
 wire [17:0] prg_addr;
 wire [23:0] tx_addr, bg_addr, roz_addr;
 wire [27:0] spr_addr;
@@ -533,7 +538,7 @@ ms32_core u_core (
 	.dbg_road_row(dbg_road_row), .dbg_road_rowword(dbg_road_rowword),
 	.dbg_road_starty(dbg_road_starty), .dbg_road_offsy(dbg_road_offsy),
 	.dbg_mem_en(dbg_mem_en), .dbg_mem_reg(dbg_mem_reg), .dbg_mem_addr(dbg_mem_addr), .dbg_mem_data(dbg_mem_data),
-	.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs),
+	.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs), .dbg_fpu_cnt(dbg_fpu_cnt), .dbg_pass(dbg_pass), .dbg_fpu_ovl(dbg_fpu_ovl), .dbg_chains(dbg_chains), .dbg_pre(dbg_pre),
 	.nv_addr(ioctl_addr[12:0]), .nv_rdata(nv_rdata), .nv_written(nv_written),
 	.snd_reset(snd_reset), .snd_cmd_we(snd_cmd_we), .snd_cmd_data(snd_cmd_data),
 	.snd_tomain_we(snd_tomain_we), .snd_tomain_data(snd_tomain_data),
@@ -574,24 +579,25 @@ ms32_sound u_sound (
 
 `ifdef DEBUG_ISSP
 // A window on the video RAMs, read over JTAG by scripts/dump_ram.py: source
-// [20:0] = {dump, enable, region[2:0], address[15:0]}, probe = the 16-bit word.
+// [21:0] = {dump, enable, region[3:0], address[15:0]}, probe = the 16-bit word.
+// Regions 0-7 are the video RAMs, 8 and 9 the two FPUs' data RAMs, 10 the FPU0 read log.
 // scripts/render_model.py then renders the board's own RAM, which is the only
 // way to tell "the RTL is wrong" from "the RAM is wrong". While the enable is
 // held the read ports are taken over and the picture is garbage, so the game
 // wants pausing first.
-wire [20:0] memwin_src;
-wire [2:0]  win_reg  = memwin_src[18:16];
+wire [21:0] memwin_src;
+wire [3:0]  win_reg  = memwin_src[19:16];
 wire [15:0] win_addr = memwin_src[15:0];
 wire [3:0]  dump_slot = ioctl_addr[20:17] - 4'd1;
-assign dump_req = memwin_src[20];
+assign dump_req = memwin_src[21];
 // While the HPS is streaming a dump out, the window follows the upload
 // address instead of the one JTAG set (layout above: word in bits 16:1).
-assign dbg_mem_en   = memwin_src[19] | dump_win;
-assign dbg_mem_reg  = dump_win ? dump_slot[2:0]   : win_reg;
+assign dbg_mem_en   = memwin_src[20] | dump_win;
+assign dbg_mem_reg  = dump_win ? {1'b0, dump_slot[2:0]} : win_reg;
 assign dbg_mem_addr = dump_win ? ioctl_addr[16:1] : win_addr;
 altsource_probe #(
 	.sld_auto_instance_index("YES"), .instance_id("D"),
-	.probe_width(16), .source_width(21), .source_initial_value("0"),
+	.probe_width(16), .source_width(22), .source_initial_value("0"),
 	.enable_metastability("NO"), .lpm_type("altsource_probe")
 ) u_memwin (
 	.probe(dbg_mem_data), .source(memwin_src), .source_clk(clk_sys), .source_ena(1'b1)
@@ -628,10 +634,30 @@ issp_video_probe #(.INSTANCE_ID("V")) u_issp_v (
 	.road_row(dbg_road_row), .road_rowword(dbg_road_rowword),
 	.road_starty(dbg_road_starty), .road_offsy(dbg_road_offsy)
 );
+// F-1 Super Battle, per FPU, since reset (clk_cpu, wrapping; ms32_cpu_sys),
+// read with scripts/read_issp.py. A second instance: one is capped at 511 bits.
+//   [15:0] FPU0 host reads   [31:16] FPU0 host writes
+//   [47:32] FPU1 host reads  [63:48] FPU1 host writes
+//   [79:64] FPU0 irqs raised [95:80] FPU1 irqs raised
+//   [111:96] FPU0 starts     [127:112] FPU1 starts
+// and per field pass (ms32_cpu_sys dbg_pass):
+//   [135:128] lowest road line written in the last pass  [143:136] highest
+//   [159:144] road line RAM writes in the last pass
+//   [175:160] writes to FEE10000 (the main loop's idle flag)  [191:176] field events
+//   [207:192] V70 data/register writes that land while FPU0 runs a routine
+//   [223:208] FPU0 chains started (PC writes of 0x338; read log in window region 10)
+//   [239:224] hash of FPU0 writes before chain 0   [255:240] their count
+altsource_probe #(
+	.sld_auto_instance_index("YES"), .instance_id("F"),
+	.probe_width(256), .source_width(1), .source_initial_value("0"),
+	.enable_metastability("NO"), .lpm_type("altsource_probe")
+) u_issp_f (
+	.probe({dbg_pre, dbg_chains, dbg_fpu_ovl, dbg_pass, dbg_fpu_cnt}), .source(), .source_clk(clk_sys), .source_ena(1'b1)
+);
 `else
 assign dump_req = 1'b0;
 assign dbg_mem_en = 1'b0;
-assign dbg_mem_reg = 3'd0;
+assign dbg_mem_reg = 4'd0;
 assign dbg_mem_addr = 16'd0;
 `endif
 

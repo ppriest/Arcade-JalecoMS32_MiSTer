@@ -48,6 +48,8 @@ set npoll 0
 set pi [lsearch -exact $argv poll]
 if {$pi >= 0} { set npoll [lindex $argv [expr {$pi + 1}]] }
 if {$npoll > 0} {
+    set fi -1
+    foreach inst $insts { if {[lindex $inst 3] eq "F"} { set fi [lindex $inst 0] } }
     foreach inst $insts {
         set ii [lindex $inst 0]
         if {[lindex $inst 3] ne "V"} { continue }
@@ -57,10 +59,12 @@ if {$npoll > 0} {
             end_insystem_source_probe
             exit 1
         }
-        puts "sample frames roadlines roadpens sprdrawn flipx flipy fyattr fyslot row rowword starty offsy"
+        puts "sample frames roadlines roadpens sprdrawn | fpu0: starts irqs reads writes | fpu1: starts irqs reads writes | pass: lines min-max writes | flagwr fields | fpu0 writes while busy"
         for {set k 0} {$k < $npoll} {incr k} {
             set p [read_probe_data -instance_index $ii]
-            puts [format "%d %d %d %d %d %d %d %04X %d %d %04X %04X %04X" $k                 [bits_to_int $p 103 118] [bits_to_int $p 284 299] [bits_to_int $p 300 315]                 [bits_to_int $p 342 354] [bits_to_int $p 316 328] [bits_to_int $p 329 341]                 [bits_to_int $p 355 370] [bits_to_int $p 371 382]                 [bits_to_int $p 383 392] [bits_to_int $p 393 408]                 [bits_to_int $p 409 424] [bits_to_int $p 425 440]]
+            # not through expr: it would read the bit string as a number
+            if {$fi >= 0} { set f [read_probe_data -instance_index $fi] } else { set f [string repeat 0 256] }
+            puts [format "%d %d %d %d %d | %d %d %d %d | %d %d %d %d | %d-%d %d | %d %d | %d" $k                 [bits_to_int $p 103 118] [bits_to_int $p 284 299] [bits_to_int $p 300 315]                 [bits_to_int $p 342 354]                 [bits_to_int $f 96 111] [bits_to_int $f 64 79] [bits_to_int $f 0 15] [bits_to_int $f 16 31]                 [bits_to_int $f 112 127] [bits_to_int $f 80 95] [bits_to_int $f 32 47] [bits_to_int $f 48 63]                 [bits_to_int $f 128 135] [bits_to_int $f 136 143] [bits_to_int $f 144 159] [bits_to_int $f 160 175] [bits_to_int $f 176 191] [bits_to_int $f 192 207]]
             after 700
         }
     }
@@ -82,7 +86,7 @@ foreach inst $insts {
     # running an older bitstream decodes into plausible nonsense unless the
     # width is checked -- that has already happened once here.
     set want 0
-    if {$iid eq "M"} { set want 132 } elseif {$iid eq "V"} { set want 441 }
+    if {$iid eq "M"} { set want 132 } elseif {$iid eq "V"} { set want 441 } elseif {$iid eq "F"} { set want 256 }
     if {$want && [string length $p] != $want} {
         puts "WIDTH MISMATCH: instance $iid is [string length $p] bits, this tree'srtl/debug expects $want. The board is running a different build; the numbersbelow would be nonsense, so they are not printed. Deploy this tree's bitstream,or read it with \"raw\" and decode against that build's own header."
         continue
@@ -131,6 +135,14 @@ foreach inst $insts {
         puts [format "first flipy sprite        : attr %04X at slot %d" [bits_to_int $p 355 370] [bits_to_int $p 371 382]]
         puts [format "road row / vram\[2 row\]    : %d / %04X" [bits_to_int $p 383 392] [bits_to_int $p 393 408]]
         puts [format "road starty / offsy       : %04X / %04X" [bits_to_int $p 409 424] [bits_to_int $p 425 440]]
+    } elseif {$iid eq "F"} {
+        puts [format "FPU0 starts/irqs/rd/wr    : %d / %d / %d / %d" [bits_to_int $p 96 111] [bits_to_int $p 64 79] [bits_to_int $p 0 15] [bits_to_int $p 16 31]]
+        puts [format "FPU1 starts/irqs/rd/wr    : %d / %d / %d / %d" [bits_to_int $p 112 127] [bits_to_int $p 80 95] [bits_to_int $p 32 47] [bits_to_int $p 48 63]]
+        puts [format "last pass road lines      : %d-%d, %d writes" [bits_to_int $p 128 135] [bits_to_int $p 136 143] [bits_to_int $p 144 159]]
+        puts [format "FEE10000 writes / fields  : %d / %d" [bits_to_int $p 160 175] [bits_to_int $p 176 191]]
+        puts [format "FPU0 writes while busy    : %d" [bits_to_int $p 192 207]]
+        puts [format "FPU0 chains started       : %d" [bits_to_int $p 208 223]]
+        puts [format "FPU0 writes before chain 0: %d, hash %04x" [bits_to_int $p 240 255] [bits_to_int $p 224 239]]
     } else {
         puts "raw: $p"
     }

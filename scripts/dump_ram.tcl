@@ -6,8 +6,8 @@
 #   quartus_stp -t scripts/dump_ram.tcl trigger
 #
 # region: 0 road map, 1 road line RAM, 2 road_ctrl, 3 priority RAM,
-#         4 ROZ map, 5 ROZ line RAM, 6 TX map, 7 palette
-# trigger: pulse source bit 20, which has the core ask the HPS to upload the
+#         4 ROZ map, 5 ROZ line RAM, 6 TX map, 7 palette, 8 FPU0 data, 9 FPU1 data
+# trigger: pulse source bit 21, which has the core ask the HPS to upload the
 #         NVRAM slot and all eight regions to the .mra's .nvm file (MS32.sv)
 set region [lindex $argv 0]
 set count  [lindex $argv 1]
@@ -34,12 +34,12 @@ start_insystem_source_probe -hardware_name $hw -device_name $dev
 # write_source_data takes a binary string, MSB first, source-width long
 proc bits {n} {
     set s ""
-    for {set i 20} {$i >= 0} {incr i -1} { append s [expr {($n >> $i) & 1}] }
+    for {set i 21} {$i >= 0} {incr i -1} { append s [expr {($n >> $i) & 1}] }
     return $s
 }
 
 if {$region eq "trigger"} {
-    write_source_data -instance_index $ii -value [bits [expr {1 << 20}]]
+    write_source_data -instance_index $ii -value [bits [expr {1 << 21}]]
     after 100
     write_source_data -instance_index $ii -value [bits 0]
     end_insystem_source_probe
@@ -49,8 +49,8 @@ if {$region eq "trigger"} {
 
 set fh [open $out w]
 for {set a 0} {$a < $count} {incr a} {
-    # {dump, enable, region[2:0], address[15:0]}
-    set src [expr {(1 << 19) | ($region << 16) | $a}]
+    # {dump, enable, region[3:0], address[15:0]}
+    set src [expr {(1 << 20) | ($region << 16) | $a}]
     write_source_data -instance_index $ii -value [bits $src]
     set v [read_probe_data -instance_index $ii]
     # binary string, MSB first

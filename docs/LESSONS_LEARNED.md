@@ -1962,6 +1962,9 @@ debugging the new one. If that fails too, power-cycle the board first.
 
 ## Tooling and workflow (Quartus, ModelSim, and the shell around them)
 
+- **An `altsource_probe` instance takes at most 511 probe bits** (Quartus 17.0,
+  `altsource_probe_body.vhd` asserts it at elaboration, so the build fails in Analysis &
+  Synthesis). Past that, add a second instance with its own `instance_id` rather than widening.
 - **Working directory does not reliably persist into backgrounded shell commands.** Launch every
   Quartus/ModelSim invocation as `cd <project dir> && <tool>` in one command line, or make it
   cwd-independent; for Tcl-driven tools put the `cd` inside the Tcl script. Symptoms:

@@ -155,7 +155,12 @@ module ms32_video (
 	// ------------------------------------------------------------------ CRTC
 	logic [11:0] hcnt, vcnt, vcnt_next, vcnt_next2, hdisplay, vdisplay;
 	logic        h_active, v_active, line_start;
-	ms32_crtc u_crtc (
+`ifdef F1SUPERB
+	localparam bit FIELD_LAST_ACTIVE = 1'b1;   // ms32_crtc: MAME's set_field_irq_last_active_line
+`else
+	localparam bit FIELD_LAST_ACTIVE = 1'b0;
+`endif
+	ms32_crtc #(.FIELD_LAST_ACTIVE(FIELD_LAST_ACTIVE)) u_crtc (
 		.clk(clk), .reset(reset),
 		.reg_we(crtc_we), .reg_off(vreg_off[5:2]), .reg_data(vreg_data),
 		.ce_pix(ce_pix), .hcnt(hcnt), .vcnt(vcnt), .vcnt_next(vcnt_next), .vcnt_next2(vcnt_next2),

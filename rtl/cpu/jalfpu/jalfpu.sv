@@ -59,7 +59,14 @@ module jalfpu #(
 	output logic [255:0] dbg_s,     // s0 in [15:0], sf in [255:240]
 	output logic [15:0] dbg_c6, dbg_c7, dbg_sign,
 	output logic [3:0]  dbg_flags,
-	output logic [2:0]  dbg_sp
+	output logic [2:0]  dbg_sp,
+
+	// A JTAG window on the data RAM (MS32.sv, DEBUG_ISSP): while dbg_ren is
+	// high port B reads dbg_raddr instead of the host's address, so a host read
+	// in that time gets the wrong word -- the game should be paused.
+	input  logic        dbg_ren,
+	input  logic [11:0] dbg_raddr,
+	output logic [15:0] dbg_rdata
 );
 
 	// ------------------------------------------------------------ clock enable
@@ -104,8 +111,9 @@ module jalfpu #(
 	dpram #(.ADDR_WIDTH(12), .DATA_WIDTH(16)) u_data (
 		.clk(clk),
 		.a_addr(d_addr), .a_wel(d_we), .a_weh(d_we), .a_wdata(d_wdata), .a_rdata(d_rdata),
-		.b_addr(d_haddr), .b_re(1'b1), .b_rdata(d_hrdata)
+		.b_addr(dbg_ren ? dbg_raddr : d_haddr), .b_re(1'b1), .b_rdata(d_hrdata)
 	);
+	assign dbg_rdata = d_hrdata;
 
 	// ------------------------------------------------------------ host port
 	// Two cycles: latch the request and present the RAM address, then answer
@@ -226,9 +234,18 @@ module jalfpu #(
 	wire         dv_fits  = !dv_diff[17];
 
 	// ------------------------------------------------------------ sequencer
-	typedef enum logic [2:0] {T_IDLE, T_FETCH, T_EXEC, T_LOAD, T_LOAD2, T_DIV, T_DIVEND} st_t;
+	typedef enum logic [2:0] {T_IDLE, T_FETCH, T_EXEC, T_LOAD, T_LOAD2, T_DIV, T_DIVEND, T_LOADA} st_t;
 	st_t st;
 	logic [3:0] ld_rb;              // the register a pending load writes
+	logic [11:0] ld_ea;             // and its address, to present again after a host write
+
+	// A host write to the data RAM (port A) or to a register lands in H_WAIT.
+	// The routine sits that cycle out: its own port A access or register write
+	// in the same cycle would override the host's. MAME has no such overlap
+	// -- the V70 never writes while a routine runs there -- but this FPU is
+	// slower than MAME's, so on the board it can. A load caught by it presents
+	// its address again (T_LOADA), since the host's write moved port A.
+	wire         h_wr_now  = (hst == H_WAIT) && h_we_l && (h_is_data || h_is_reg);
 
 	// the bench's view (Quartus 17 wants the block named and one assign apiece)
 	genvar gi;
@@ -320,7 +337,9 @@ module jalfpu #(
 			endcase
 
 			// ---------------------------------------------- core
-			if (!dbg_stall) case (st)
+			if (h_wr_now) begin
+				if (st == T_LOAD || st == T_LOAD2) st <= T_LOADA;
+			end else if (!dbg_stall) case (st)
 				T_IDLE: if (running && !h_dwrite) begin
 					p_raddr <= pc;
 					st      <= T_FETCH;
@@ -422,6 +441,7 @@ module jalfpu #(
 
 						4'hc: begin                   // data RAM load and store
 							d_addr <= d_ea[11:0];
+							ld_ea  <= d_ea[11:0];
 							if (fn[1]) s[ra] <= fn[0] ? (sa - 16'd1) : (sa + 16'd1);
 							if (fn[5]) begin
 								ld_rb <= rb;
@@ -474,6 +494,11 @@ module jalfpu #(
 				end
 
 				T_LOAD: st <= T_LOAD2;            // the RAM is reading
+
+				T_LOADA: begin                    // a host write moved port A: again
+					d_addr <= ld_ea;
+					st     <= T_LOAD;
+				end
 
 				T_LOAD2: begin
 					s[ld_rb]   <= d_rdata;

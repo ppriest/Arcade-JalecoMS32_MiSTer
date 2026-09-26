@@ -38,11 +38,17 @@
 //
 // Interrupt events, one clk each, at the moments jaleco_ms32_sysctrl's
 // scanline timer raises them: vblank_ev when vcnt reaches vdisplay,
-// field_ev when vcnt reaches 0 on an odd frame (the 30 Hz "field" line).
+// field_ev when vcnt reaches 0 on an odd frame (the 30 Hz "field" line) --
+// or, with FIELD_LAST_ACTIVE, when it reaches vdisplay - 1 on an odd frame:
+// MAME's set_field_irq_last_active_line(), which F-1 Super Battle alone has.
+// Its field handler releases the main loop (the frame's work, the road
+// update among it), so there the field interrupt comes one line BEFORE
+// vblank's rather than 39 lines after it.
 // Which IRQ level each drives is the interrupt controller's business
 // (ms32_invert_lines swaps them for tp2m32/wpksocv2).
 module ms32_crtc #(
-	parameter int CLK_HZ = 96_000_000
+	parameter int CLK_HZ = 96_000_000,
+	parameter bit FIELD_LAST_ACTIVE = 1'b0
 ) (
 	input  logic        clk,
 	input  logic        reset,
@@ -168,7 +174,9 @@ module ms32_crtc #(
 		end else begin
 			line_start <= ce_pix && (hcnt == r_hdisplay - 12'd1);
 			vblank_ev  <= ce_pix && h_last && (vcnt + 12'd1 == r_vdisplay);
-			field_ev   <= ce_pix && h_last && v_last && ~frame_odd;   // frame about to start is odd
+			field_ev   <= FIELD_LAST_ACTIVE
+			            ? ce_pix && h_last && (vcnt + 12'd2 == r_vdisplay) && frame_odd   // entering line vdisplay-1, odd frame
+			            : ce_pix && h_last && v_last && ~frame_odd;                       // frame about to start is odd
 		end
 	end
 
