@@ -1,0 +1,6 @@
+rtl/memory/dpram.sv
+rtl/video/ms32_crtc.sv
+rtl/video/ms32_tilemap.sv
+rtl/video/ms32_lineplane.sv
+rtl/video/ms32_mixer_f1.sv
+sim/f1mix_tb/tb_f1mix.sv

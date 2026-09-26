@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""Keep JTAG and Quartus off this machine at the same time.
+"""Keep JTAG and Quartus off this machine at the same time, and give JTAG priority.
 
-Shared by the Fuuki, Psikyo, Seta and Jaleco MS32 cores -- one PC, one
-USB-Blaster, one Quartus, and a marker outside any of the repos so all four
-see each other.
+Shared by every MiSTer core on this PC -- one USB-Blaster, one Quartus, and
+markers outside any of the repos so all of them see each other.
 
-Running a JTAG session (read_issp.tcl, memdump.py, the tracer readout) while
-a Quartus compile is in flight has taken this PC down three times:
-KERNEL_SECURITY_CHECK_FAILURE, bugcheck 0x139 -- a corrupted kernel list
-entry -- on 2026-09-06 at 12:20, 12:27 and again that evening. Each one cost
-a running measurement, and the third cost a frozen fault state that had
-taken a while to reach.
-
-It was written down as a caution after the first two and happened anyway, so
-it is enforced here rather than remembered. Both directions:
+Running a JTAG session (read_issp.tcl, a memory dump) while a Quartus
+compile is in flight has bugchecked this PC (0x139, KERNEL_SECURITY_CHECK_FAILURE)
+three times. Enforced here rather than remembered. Three rules:
 
   * a JTAG tool refuses to start while Quartus OR ModelSim is running;
   * a build, or a simulation, refuses to start while a JTAG tool holds the
-    marker.
+    marker;
+  * **a build or simulation refuses to start while a JTAG tool is WAITING**,
+    even though the build itself would be legal. Without this, a JTAG session
+    can wait indefinitely on a machine that always has one more compile
+    starting: each build is individually fine and the probe read never runs.
+    A waiting session publishes a reservation, new builds stand off, the
+    in-flight ones finish, and the probe goes first.
 
 Quartus and ModelSim are NOT a hazard to each other: builds and simulations
 may run side by side, and several of either at once.
 
-The marker is a file rather than a lock object because the JTAG side is a
+The markers are files rather than lock objects because the JTAG side is a
 mix of Python and quartus_stp Tcl, and a file is the only thing both can
-agree on. It carries the pid and what the session was for, and a stale one
+agree on. Each carries the pid and what the session was for, and a stale one
 (whose pid is gone) is cleared automatically -- a crashed tool must not
 wedge every later build.
 """
@@ -36,14 +35,19 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# MACHINE-WIDE, not per-repo. There are four MiSTer cores on this PC --
-# Fuuki, Psikyo, Seta and Jaleco MS32 -- sharing one USB-Blaster and one
-# Quartus install, and the bugcheck does not care which repo started which
-# half. A marker under one repo's build/ would let an MS32 compile start
-# while a Fuuki probe was reading, which is exactly the combination being
-# guarded against. It lives beside the user profile so every copy of this
-# file agrees on it.
-MARKER = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "mister_jtag_running"
+# MACHINE-WIDE, not per-repo: every core on this PC shares one USB-Blaster
+# and one Quartus install, and the bugcheck does not care which repo started
+# which half. Do not make these paths per-repo and do not move them under
+# build/; the point is that every copy of this file names the same files.
+_BASE = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+MARKER = _BASE / "mister_jtag_running"
+# One reservation per waiting session, so several may queue without racing on
+# a single file: mister_jtag_wanted.<pid>
+WANT_GLOB = "mister_jtag_wanted.*"
+
+
+def _want_path(pid=None):
+    return _BASE / ("mister_jtag_wanted.%d" % (pid if pid is not None else os.getpid()))
 
 
 def quartus_processes():
@@ -96,6 +100,34 @@ def read_marker():
     return pid, what.strip()
 
 
+def waiting_sessions():
+    """[(pid, what)] for JTAG sessions queued for the Blaster, stale ones removed."""
+    out = []
+    for p in sorted(_BASE.glob(WANT_GLOB)):
+        try:
+            pid = int(p.name.rsplit(".", 1)[1])
+            what = p.read_text(encoding="utf-8").strip()
+        except Exception:
+            p.unlink(missing_ok=True)
+            continue
+        if _pid_alive(pid):
+            out.append((pid, what))
+        else:
+            p.unlink(missing_ok=True)
+    return out
+
+
+def reserve_jtag(what="this JTAG session"):
+    """Publish that a JTAG session is waiting: new builds stand off from here."""
+    _BASE.mkdir(parents=True, exist_ok=True)
+    _want_path().write_text("%s: %s, waiting since %s"
+                            % (REPO.name, what, time.strftime("%H:%M:%S")), encoding="utf-8")
+
+
+def release_reservation():
+    _want_path().unlink(missing_ok=True)
+
+
 def require_no_quartus(what="this JTAG session"):
     """Refuse to run a JTAG tool while Quartus is compiling."""
     procs = quartus_processes()
@@ -103,12 +135,36 @@ def require_no_quartus(what="this JTAG session"):
         sys.exit(
             "REFUSING %s: Quartus/ModelSim is running (%s).\n"
             "JTAG concurrent with either has bugchecked this PC (0x139). "
-            "Wait for it, or stop it deliberately."
+            "Wait for it (--wait), or stop it deliberately."
             % (what, ", ".join(sorted(set(procs)))))
 
 
+def wait_for_quartus(what="this JTAG session", timeout=3600, poll=10, log=print):
+    """Reserve the Blaster, then wait for in-flight Quartus/ModelSim to finish.
+
+    The reservation is what makes this terminate: while it stands, no NEW build
+    or simulation may start, so the set of processes to wait for only shrinks.
+    """
+    reserve_jtag(what)
+    deadline = time.time() + timeout
+    announced = False
+    while True:
+        procs = sorted(set(quartus_processes()))
+        if not procs:
+            return True
+        if not announced:
+            log("waiting for %s to finish before %s; new builds are blocked "
+                "while this reservation stands" % (", ".join(procs), what))
+            announced = True
+        if time.time() > deadline:
+            release_reservation()
+            sys.exit("REFUSING %s: %s still running after %d s. Reservation dropped so "
+                     "builds can proceed; try again later." % (what, ", ".join(procs), timeout))
+        time.sleep(poll)
+
+
 def require_no_jtag(what="this build"):
-    """Refuse to start a build while a JTAG tool holds the marker."""
+    """Refuse to start a build while a JTAG tool holds the marker OR is waiting."""
     held = read_marker()
     if held:
         pid, why = held
@@ -117,30 +173,58 @@ def require_no_jtag(what="this build"):
             "JTAG concurrent with a compile has bugchecked this PC three "
             "times (0x139). Wait for it, or kill it deliberately and delete\n"
             "  %s" % (what, pid, why, MARKER))
+    queued = waiting_sessions()
+    if queued:
+        lines = "\n".join("  pid %d: %s" % (p, w) for p, w in queued)
+        sys.exit(
+            "REFUSING %s: a JTAG session is WAITING for the Blaster:\n%s\n"
+            "JTAG has priority: a probe read cannot get in edgeways on a machine that "
+            "always has one more compile starting. Let it take the Blaster first; it "
+            "releases as soon as it is done. Its reservation is in\n"
+            "  %s" % (what, lines, _BASE / WANT_GLOB))
 
 
 if __name__ == "__main__":
-    # command-line form for shell scripts: exit non-zero if a JTAG session
-    # holds the marker
+    # command-line forms for shell scripts
     if len(sys.argv) >= 2 and sys.argv[1] == "--require-no-jtag":
         require_no_jtag(sys.argv[2] if len(sys.argv) > 2 else "this build")
+        sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == "--status":
+        held = read_marker()
+        print("jtag holder :", "%d (%s)" % held if held else "none")
+        for pid, what in waiting_sessions():
+            print("jtag waiting:", pid, what)
+        procs = sorted(set(quartus_processes()))
+        print("quartus/msim:", ", ".join(procs) if procs else "none")
         sys.exit(0)
 
 
 class jtag_session:
-    """Context manager: guard, take the marker, release it on the way out."""
+    """Context manager: reserve, guard, take the marker, release on the way out.
 
-    def __init__(self, what="jtag"):
+    wait=True (the default) reserves the Blaster and waits for an in-flight
+    build or simulation instead of refusing; the reservation stops new ones
+    starting. wait=False keeps the old behaviour: refuse immediately.
+    """
+
+    def __init__(self, what="jtag", wait=True, timeout=3600):
         self.what = what
+        self.wait = wait
+        self.timeout = timeout
 
     def __enter__(self):
-        require_no_quartus(self.what)
+        if self.wait:
+            wait_for_quartus(self.what, timeout=self.timeout)
+        else:
+            require_no_quartus(self.what)
         MARKER.parent.mkdir(parents=True, exist_ok=True)
         MARKER.write_text("%d\n%s at %s\n"
                           % (os.getpid(), REPO.name + ": " + self.what, time.strftime("%H:%M:%S")),
                           encoding="utf-8")
+        release_reservation()      # holding the marker supersedes the reservation
         return self
 
     def __exit__(self, *exc):
         MARKER.unlink(missing_ok=True)
+        release_reservation()
         return False

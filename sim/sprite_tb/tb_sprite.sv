@@ -20,7 +20,7 @@ reg reset = 1;
 string CAP, GAME, OUTDIR;
 integer LAT;
 
-reg [7:0]  rom [0:(1 << 24) - 1];
+reg [7:0]  rom [0:(1 << 25) - 1];   // 32 MB: f1superb's sprite ROM is the whole of it
 integer    rom_mask;
 reg [15:0] objram [0:32767];
 reg [31:0] sprctrl [0:31];

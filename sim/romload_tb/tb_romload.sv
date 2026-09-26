@@ -28,7 +28,7 @@ reg [27:0] LEN;
 // ------------------------------------------------------------- DDR3 model
 // single-beat reads of 64-bit words at DDRAM_ADDR[24:0] (byte 0x30000000 +
 // 8*word), a few clocks of latency
-reg [7:0] stream [0:(1 << 25) - 1];
+reg [7:0] stream [0:(1 << 26) - 1];   // 64 MB: f1superb's image is 58.75 MB
 wire        DDRAM_BUSY, DDRAM_RD, DDRAM_WE, DDRAM_DOUT_READY;
 wire [7:0]  DDRAM_BURSTCNT, DDRAM_BE;
 wire [28:0] DDRAM_ADDR;
@@ -68,7 +68,11 @@ ddram_phy u_phy (
 	.req(ddr_req), .we(1'b0), .addr(ddr_addr), .wdata(8'd0),
 	.busy(ddr_busy), .valid(ddr_valid), .rdata(ddr_rdata)
 );
+// +F1=1: F-1 Super Battle's 64 MB map instead of the 32 MB one
+reg f1 = 0;
+initial f1 = $test$plusargs("F1");
 ms32_rom_loader #(.LENGTH(28'h1FC_0000)) u_ldr (
+	.bigmap(f1),
 	.clk(clk), .reset(rst),
 	.start(start), .active(l_active),
 	.ddr_req(ddr_req), .ddr_addr(ddr_addr), .ddr_busy(ddr_busy), .ddr_valid(ddr_valid), .ddr_rdata(ddr_rdata),
@@ -85,7 +89,7 @@ ms32_sdram_top u_sdram (
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(SDRAM_CLK),
 	.ioctl_download(l_active), .ioctl_index(16'd0), .ioctl_wr(l_wr), .ioctl_addr(l_addr),
-	.ioctl_dout(l_dout), .ioctl_wait(sd_wait), .key(KEY[1:0]), .spr25(1'b0),
+	.ioctl_dout(l_dout), .ioctl_wait(sd_wait), .key(KEY[1:0]), .spr25(f1), .bigmap(f1),
 	.tx_req(1'b0), .tx_addr(24'd0), .tx_valid(), .tx_data(),
 	.bg_req(1'b0), .bg_addr(24'd0), .bg_valid(), .bg_data(),
 	.roz_req(1'b0), .roz_addr(24'd0), .roz_valid(), .roz_data(),
@@ -96,13 +100,13 @@ ms32_sdram_top u_sdram (
 	.obj_rreq(1'b0), .obj_raddr(13'd0), .obj_rvalid(), .obj_rdata(), .obj_wreq(1'b0), .obj_waddr(16'd0), .obj_we16(1'b0), .obj_wdata(16'd0), .obj_wbusy(),
 	.dbg_dl_req(), .dbg_dl_busy()
 );
-sdram_chip_model_wide u_chip (
+sdram_chip_model_wide #(.MB(64)) u_chip (
 	.clk(clk), .SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_BA(SDRAM_BA),
 	.SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS)
 );
 
 // ------------------------------------------------------------- check
-reg [7:0] img [0:(1 << 24) - 1];
+reg [7:0] img [0:(1 << 25) - 1];
 integer fd, n, k, bad, total_bad;
 
 task check(input string name, input integer base, input integer size, input integer block);
@@ -133,11 +137,11 @@ initial begin
 	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
 	if (!$value$plusargs("KEY=%d", KEY))   KEY = 1;
 	if (!$value$plusargs("STREAM=%s", STREAM)) STREAM = {"simout/", GAME, "_stream.bin"};
-	if (!$value$plusargs("LEN=%h", LEN))   LEN = 28'h1FC_0000;
+	if (!$value$plusargs("LEN=%h", LEN))   LEN = f1 ? 28'h3AC_0000 : 28'h1FC_0000;
 	fd = $fopen(STREAM, "rb"); if (fd == 0) begin $display("FATAL no %s", STREAM); $finish; end
 	n = $fread(stream, fd); $fclose(fd);
 	$display("stream %0d bytes, copying %0d", n, LEN);
-	for (k = 0; k < (1 << 24); k = k + 1) u_chip.mem[k] = 16'hEEEE;
+	for (k = 0; k < (1 << 25); k = k + 1) u_chip.mem[k] = 16'hEEEE;
 
 	repeat (20) @(posedge clk); init = 0;
 	repeat (300) @(posedge clk); rst = 0;
@@ -152,10 +156,20 @@ initial begin
 	check("maincpu",      26'h000_0000, 26'h020_0000, 1);
 	check("txtiles_dec",  26'h020_0000, 26'h008_0000, 26'h008_0000);
 	check("bgtiles_dec",  26'h028_0000, 26'h040_0000, 26'h010_0000);
-	check("roztiles",     26'h068_0000, 26'h040_0000, 1);
-	check("sprite",       26'h0A8_0000, 26'h110_0000, 1);
-	check("audiocpu",     26'h1B8_0000, 26'h004_0000, 1);
-	check("ymf",          26'h1BC_0000, 26'h040_0000, 1);
+	if (!f1) begin
+		check("roztiles",     26'h068_0000, 26'h040_0000, 1);
+		// whole repeats only: the .mra fills the rest of the 17 MB with zeros,
+		// which a repeat of the ROM data cannot express (build_mra.py says so too)
+		check("sprite",       26'h0A8_0000, 26'h100_0000, 1);
+		check("audiocpu",     26'h1B8_0000, 26'h004_0000, 1);
+		check("ymf",          26'h1BC_0000, 26'h040_0000, 1);
+	end else begin   // scripts/build_mra.py's MAP_F1
+		check("roztiles",     26'h068_0000, 26'h080_0000, 1);
+		check("gfx5",         26'h0E8_0000, 26'h080_0000, 1);
+		check("audiocpu",     26'h168_0000, 26'h004_0000, 1);
+		check("ymf",          26'h16C_0000, 26'h040_0000, 1);
+		check("sprite",       26'h1AC_0000, 26'h200_0000, 1);
+	end
 	$display("ROMLOAD: %0d bytes differ in total", total_bad);
 	$finish;
 end

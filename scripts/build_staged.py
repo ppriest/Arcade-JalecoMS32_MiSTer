@@ -129,6 +129,15 @@ REQUIRED_INSTANCES = (
     "ms32_crtc", "ms32_tilemap", "ms32_roz", "ms32_sprite", "ms32_sprite_fb", "ms32_mixer",
 )
 
+# MS32F1 is the same design with F1SUPERB defined: the ROZ plane is replaced by
+# two line planes and the mixer by the priority-RAM one, so those two names are
+# legitimately absent and three more must be there instead.
+_F1_INSTANCES = (
+    "ms32_crtc", "ms32_tilemap", "ms32_sprite", "ms32_sprite_fb",
+    "ms32_lineplane", "ms32_mixer_f1", "jalfpu",
+)
+REQUIRED_INSTANCES_BY_REV = {"MS32F1": _F1_INSTANCES, "MS32F1_stp": _F1_INSTANCES}
+
 # Macros the design needs defined, and what breaks without each.
 #
 # PRESENCE IS NOT CONNECTION. screen_rotate_two was in the fitted netlist of
@@ -166,8 +175,9 @@ def check_present(stage):
     except OSError:
         print("  (no fit report at %s -- cannot check)" % rpt)
         return []
-    missing = [n for n in REQUIRED_INSTANCES if n not in text]
-    for n in REQUIRED_INSTANCES:
+    required = REQUIRED_INSTANCES_BY_REV.get(REV, REQUIRED_INSTANCES)
+    missing = [n for n in required if n not in text]
+    for n in required:
         print("  %-18s %s" % (n, "present" if n in text else "MISSING"))
     return missing
 

@@ -23,7 +23,8 @@ import sys
 
 SRC = os.getenv("MAME_SRC", "E:/mame/src/mame/jaleco/ms32.cpp")
 
-REGIONS = ("maincpu", "sprite", "roztiles", "bgtiles", "txtiles", "audiocpu", "ymf")
+# gfx5 is f1superb's road textures; no other set has one
+REGIONS = ("maincpu", "sprite", "roztiles", "bgtiles", "txtiles", "audiocpu", "ymf", "gfx5")
 KIND = {"ROM_LOAD32_BYTE": "B", "ROM_LOAD32_WORD": "W", "ROM_LOAD": "L"}
 
 
@@ -85,9 +86,10 @@ def crcs(text):
 
 
 def games(text):
-    """{set: dict(parent, machine, init, rot, maker, name, year)} from GAME() lines."""
+    """{set: dict(parent, machine, init, rot, maker, name, year)} from GAME()/GAMEL() lines."""
     out = {}
-    for m in re.finditer(r'^GAME\(\s*(\d+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*\w+,\s*(\w+),\s*(ROT\d+),\s*"([^"]*)",\s*"([^"]*)"',
+    # GAMEL() for f1superb, which ships an artwork layout; the trailing layout argument is not read
+    for m in re.finditer(r'^GAMEL?\(\s*(\d+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*\w+,\s*(\w+),\s*(ROT\d+),\s*"([^"]*)",\s*"([^"]*)"',
                          text, re.M):
         year, s, parent, machine, inputs, init, rot, maker, name = m.groups()
         out[s] = dict(year=year, parent=parent, machine=machine, inputs=inputs, init=init,

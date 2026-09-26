@@ -58,6 +58,7 @@ DEF_STR = {
     "Easy": "Easy", "Normal": "Normal", "Hard": "Hard", "Hardest": "Hardest",
     "Easiest": "Easiest", "Very_Hard": "Very Hard",
     "Allow_Continue": "Allow Continue", "Service_Mode": "Service Mode",
+    "Region": "Region", "Europe": "Europe", "USA": "USA", "Japan": "Japan",
     "1C_1C": "1 Coin/1 Credit", "1C_2C": "1 Coin/2 Credits",
     "1C_3C": "1 Coin/3 Credits", "1C_4C": "1 Coin/4 Credits",
     "1C_5C": "1 Coin/5 Credits", "1C_6C": "1 Coin/6 Credits",

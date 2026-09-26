@@ -124,6 +124,7 @@ wire   [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire  [31:0] joystick_0, joystick_1;
+wire  [15:0] joy_analog_0;              // {y, x}, signed, for F-1 Super Battle's wheel
 
 wire        ioctl_download;
 wire [15:0] ioctl_index;
@@ -179,6 +180,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_rd(),
 
 	.joystick_0(joystick_0),
+	.joystick_l_analog_0(joy_analog_0),
 	.joystick_1(joystick_1),
 	.ps2_key(ps2_key)
 );
@@ -219,9 +221,57 @@ assign game_vertical = mod_byte[3];
 
 // DIPs: .mra <switches> arrive as index 254, one byte per switch bank,
 // low byte first: the 32-bit word ms32_map reads at 0xFCC00010.
+`ifdef F1SUPERB
+// f1superb has a second bank on the MB-93159 board (SW3, comms mode and car ID)
+// at 0xFD0D0000, so its .mra sends eight switch bytes and bytes 4-7 are it.
+reg [7:0] sw[8] = '{8'hFF, 8'hFF, 8'hFF, 8'hFF, 8'h00, 8'hFF, 8'hFF, 8'hFF};
+always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd254 && !ioctl_addr[24:3]) sw[ioctl_addr[2:0]] <= ioctl_dout;
+wire [31:0] dsw2 = {sw[7], sw[6], sw[5], sw[4]};
+`else
+wire [31:0] dsw2 = 32'hFFFF_FF00;   // unused: ms32_cpu_sys only reads it under F1SUPERB
 reg [7:0] sw[4] = '{8'hFF, 8'hFF, 8'hFF, 8'hFF};
 always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd254 && !ioctl_addr[24:2]) sw[ioctl_addr[1:0]] <= ioctl_dout;
+`endif
 wire [31:0] dsw = {sw[3], sw[2], sw[1], sw[0]};
+// F-1 Super Battle's controls (ms32.cpp analog_r and the f1superb ports).
+// The word at 0xFD0E0000 is {AN2, AN2, AN1 steering, AN0 accelerator}; the
+// brake and the shifter are not analog at all, they are INPUTS bits 1 and 0.
+//
+//   AN0  the accelerator pot rests at 0x50 and falls towards 0 as it is
+//        pressed -- the game takes the rest value at boot and subtracts.
+//   AN1  steering, 0x80 centre, full lock 0x00 and 0xFF.
+//   AN2  eight switches, all pulled up: MAME calls bit 7 "Shift Brake" and
+//        does not know the rest. Left at 0xFF, as MAME leaves them.
+//
+// Unverified on hardware: nothing here has been tried on a DE10-nano yet.
+wire signed [7:0] joy_x = joy_analog_0[7:0];
+// The stick when it is off centre, otherwise the d-pad, which ramps towards
+// lock while it is held and returns to centre when it is not -- steering that
+// jumps to full lock is not steering. One step per frame-ish tick, ~0.9 s lock
+// to lock; clk_sys/2^18 is about 366 Hz, so 128 steps is 0.35 s each way.
+reg  [7:0] wheel_digital = 8'h80;
+reg [17:0] wheel_tick = 18'd0;
+always @(posedge clk_sys) begin
+	wheel_tick <= wheel_tick + 18'd1;
+	if (&wheel_tick) begin
+		if (joystick_0[1] && wheel_digital != 8'h00) wheel_digital <= wheel_digital - 8'd1;        // left
+		else if (joystick_0[0] && wheel_digital != 8'hFF) wheel_digital <= wheel_digital + 8'd1;   // right
+		else if (!joystick_0[0] && !joystick_0[1])
+			wheel_digital <= (wheel_digital > 8'h80) ? wheel_digital - 8'd1 :
+			                 (wheel_digital < 8'h80) ? wheel_digital + 8'd1 : 8'h80;
+	end
+end
+wire [7:0] analog_wheel = (joy_x != 8'sd0) ? (8'h80 + joy_x) : wheel_digital;
+// The shifter is a two-position lever, so MAME gives it PORT_TOGGLE: one press
+// of the button changes gear rather than holding it there.
+reg shift_hi = 1'b0, shift_d = 1'b0;
+always @(posedge clk_sys) begin
+	shift_d <= joystick_0[6];
+	if (joystick_0[6] && !shift_d) shift_hi <= ~shift_hi;
+end
+wire [7:0] analog_accel = joystick_0[4] ? 8'h00 : 8'h50;   // button 1, pressed falls to 0
+wire [7:0] analog_an2   = 8'hFF;
+wire       f1_brake     = joystick_0[5];                   // button 2, INPUTS bit 1
 
 // ms32.cpp INPUTS at 0xFCC00004, active low. MiSTer joystick bits: 0 R, 1 L,
 // 2 D, 3 U, then the J1 list from bit 4.
@@ -230,13 +280,20 @@ function automatic [7:0] player(input [31:0] j);
 endfunction
 wire mahjong = mod_byte[5];
 reg  key_coin1 = 1'b0, key_coin2 = 1'b0;   // keyboard 5 and 6, MAME's coin keys, on every set (decoded below)
-wire [31:0] inputs = {8'hFF,
+wire [31:0] inputs_std = {8'hFF,
                       ~joystick_1[8], ~joystick_0[8],                    // 23,22 button 5
                       ~joystick_1[9] | mahjong, ~joystick_0[9] | mahjong, // 21,20 start (in the key matrix on mahjong sets)
                       ~(joystick_0[13] | joystick_1[13]),                // 19 test
                       ~(joystick_0[12] | joystick_1[12]),                // 18 service
                       ~(joystick_1[10] | key_coin2), ~(joystick_0[10] | key_coin1), // 17,16 coin (joystick, or keyboard 6 / 5)
                       player(joystick_1) | {8{mahjong}}, player(joystick_0)};   // 15:8 unused on mahjong sets
+`ifdef F1SUPERB
+// f1superb keeps the coin, service, test and start bits and nothing else: bit 0
+// is the shifter, bit 1 the brake, and 15:2 and 23:22 are unused.
+wire [31:0] inputs = {8'hFF, 2'b11, inputs_std[21:16], 14'h3FFF, ~f1_brake, ~shift_hi};
+`else
+wire [31:0] inputs = inputs_std;
+`endif
 
 // Mahjong panel (ms32.cpp ms32_mahjong, mahjong.cpp mahjong_matrix_1p) from a
 // PS/2 keyboard with MAME's default keys: A-N, Kan LCtrl, Pon LAlt, Chi Space,
@@ -286,7 +343,16 @@ wire [21:0] pcm_addr;
 wire [63:0] pcm_data;
 wire [17:0] z80_addr;
 wire  [7:0] z80_data;
-wire        prg_req, tx_req, bg_req, roz_req, spr_req;
+wire        prg_req, tx_req, bg_req, roz_req, spr_req, gfx5_req, gfx5_valid;
+wire [23:0] gfx5_addr;
+wire [63:0] gfx5_data;
+wire [15:0] dbg_road_over, dbg_fpu_runs, dbg_road_vw, dbg_road_lw, dbg_road_lines, dbg_road_pens;
+wire [12:0] dbg_spr_flipx, dbg_spr_flipy, dbg_spr_drawn;
+wire [15:0] dbg_fy_attr;
+wire [11:0] dbg_fy_idx;
+wire [9:0]  dbg_road_row;
+wire [15:0] dbg_road_rowword, dbg_road_starty, dbg_road_offsy;
+wire [19:0] dbg_fpu_max;
 wire [17:0] prg_addr;
 wire [23:0] tx_addr, bg_addr, roz_addr;
 wire [27:0] spr_addr;
@@ -295,10 +361,9 @@ wire [63:0] prg_data, tx_data, bg_data, roz_data, spr_data;
 wire        sd_wait;
 assign ioctl_wait = sd_wait | cap_wait;
 wire        dbg_dl_req, dbg_dl_busy, dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz;
-wire        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_copy_done, core_vblank_ev;
+wire        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_road_ovr_ev, dbg_copy_done, core_vblank_ev;
+wire        road_ovr;
 wire [23:0] dbg_spr_cycles;
-wire [15:0] dbg_dsw_reads, dbg_dsw_bad;
-wire [31:0] dbg_dsw_last_bad;
 wire [15:0] dbg_ymf_wait_max, dbg_if_wait_max, dbg_ymf_overrun;
 
 // FAST ROM LOAD. The .mra's <rom index="0" address="0x30000000"> makes the HPS
@@ -353,10 +418,11 @@ ms32_sdram_top u_sdram (
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(),
 	.ioctl_download(sd_dl), .ioctl_index(sd_index), .ioctl_wr(sd_wr),
-	.ioctl_addr(sd_addr), .ioctl_dout(sd_dout), .ioctl_wait(sd_wait), .key(mod_byte[1:0]), .spr25(mod_byte[4]),
+	.ioctl_addr(sd_addr), .ioctl_dout(sd_dout), .ioctl_wait(sd_wait), .key(mod_byte[1:0]), .spr25(mod_byte[4]), .bigmap(mod_byte[6]),
 	.tx_req(tx_req),   .tx_addr(tx_addr),   .tx_valid(tx_valid),   .tx_data(tx_data),
 	.bg_req(bg_req),   .bg_addr(bg_addr),   .bg_valid(bg_valid),   .bg_data(bg_data),
 	.roz_req(roz_req), .roz_addr(roz_addr), .roz_valid(roz_valid), .roz_data(roz_data),
+	.gfx5_req(gfx5_req), .gfx5_addr(gfx5_addr), .gfx5_valid(gfx5_valid), .gfx5_data(gfx5_data),
 	.spr_req(spr_req), .spr_addr(spr_addr), .spr_valid(spr_valid), .spr_data(spr_data),
 	.if_req(prg_req), .if_addr(prg_addr), .if_valid(prg_valid), .if_data(prg_data),
 	.z80_req(z80_req), .z80_addr(z80_addr), .z80_valid(z80_valid), .z80_data(z80_data),
@@ -407,7 +473,7 @@ ddram_phy u_ldr_ddram (
 	.busy(ldr_ddr_busy), .valid(ldr_ddr_valid), .rdata(ldr_ddr_rdata)
 );
 ms32_rom_loader u_ldr (
-	.clk(clk_sys), .reset(~pll_locked),
+	.clk(clk_sys), .reset(~pll_locked), .bigmap(mod_byte[6]),
 	.start(ldr_start), .active(ldr_active),
 	.ddr_req(ldr_ddr_req), .ddr_addr(ldr_ddr_addr), .ddr_busy(ldr_ddr_busy), .ddr_valid(ldr_ddr_valid), .ddr_rdata(ldr_ddr_rdata),
 	.l_wr(l_wr), .l_addr(l_addr), .l_dout(l_dout), .l_wait(sd_wait)
@@ -436,6 +502,15 @@ ms32_core u_core (
 	.clk_sys(clk_sys), .clk_cpu(clk_cpu), .sys_reset(sys_reset | ldr_active),
 	.cpu_run(core_run), .pause(pause_toggle), .invert_lines(mod_byte[2]),
 	.inputs(inputs), .dsw(dsw), .mahjong(mahjong), .mj_keys(mj_keys),
+	.analog_wheel(analog_wheel), .analog_accel(analog_accel), .analog_an2(analog_an2), .dsw2(dsw2),
+	.gfx5_req(gfx5_req), .gfx5_addr(gfx5_addr), .gfx5_valid(gfx5_valid), .gfx5_data(gfx5_data),
+	.dbg_road_over(dbg_road_over), .dbg_road_vw(dbg_road_vw), .dbg_road_lw(dbg_road_lw), .dbg_road_lines(dbg_road_lines),
+	.dbg_road_pens(dbg_road_pens), .dbg_spr_flipx(dbg_spr_flipx), .dbg_spr_flipy(dbg_spr_flipy),
+	.dbg_spr_drawn(dbg_spr_drawn), .dbg_fy_attr(dbg_fy_attr), .dbg_fy_idx(dbg_fy_idx),
+	.dbg_road_row(dbg_road_row), .dbg_road_rowword(dbg_road_rowword),
+	.dbg_road_starty(dbg_road_starty), .dbg_road_offsy(dbg_road_offsy),
+	.dbg_mem_en(dbg_mem_en), .dbg_mem_reg(dbg_mem_reg), .dbg_mem_addr(dbg_mem_addr), .dbg_mem_data(dbg_mem_data),
+	.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs),
 	.nv_addr(ioctl_addr[12:0]), .nv_rdata(nv_rdata), .nv_written(nv_written),
 	.snd_reset(snd_reset), .snd_cmd_we(snd_cmd_we), .snd_cmd_data(snd_cmd_data),
 	.snd_tomain_we(snd_tomain_we), .snd_tomain_data(snd_tomain_data),
@@ -452,10 +527,10 @@ ms32_core u_core (
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(core_vblank_ev),
 	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]),
-	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
+	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .road_overrun(road_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
-	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles),
-	.dbg_dsw_reads(dbg_dsw_reads), .dbg_dsw_bad(dbg_dsw_bad), .dbg_dsw_last_bad(dbg_dsw_last_bad), .dbg_pc()
+	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_road_ovr_ev(dbg_road_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles),
+	.dbg_pc()
 );
 
 ///////////////////////   SOUND   /////////////////////////////////
@@ -475,8 +550,33 @@ ms32_sound u_sound (
 );
 
 `ifdef DEBUG_ISSP
+// A window on the video RAMs, read over JTAG by scripts/dump_ram.py: source
+// [19:0] = {enable, region[2:0], address[15:0]}, probe = the 16-bit word.
+// scripts/render_model.py then renders the board's own RAM, which is the only
+// way to tell "the RTL is wrong" from "the RAM is wrong". While the enable is
+// held the read ports are taken over and the picture is garbage, so the game
+// wants pausing first.
+wire        dbg_mem_en;
+wire [2:0]  dbg_mem_reg;
+wire [15:0] dbg_mem_addr;
+wire [15:0] dbg_mem_data;
+wire [19:0] memwin_src;
+assign {dbg_mem_en, dbg_mem_reg, dbg_mem_addr} = memwin_src;
+altsource_probe #(
+	.sld_auto_instance_index("YES"), .instance_id("D"),
+	.probe_width(16), .source_width(20), .source_initial_value("0"),
+	.enable_metastability("NO"), .lpm_type("altsource_probe")
+) u_memwin (
+	.probe(dbg_mem_data), .source(memwin_src), .source_clk(clk_sys), .source_ena(1'b1)
+);
 // JTAG counters for the memory path and the ROZ cache (rtl/debug/issp_probe.sv;
 // read with scripts/read_issp.py, which holds the machine-wide JTAG lock).
+// Not in the F-1 Super Battle build: half of it is the ROZ cache, which
+// F1SUPERB replaces with line planes, and the download counters have done
+// their job. That revision fills the device to 94% and the framework scaler's
+// HDMI pixel clock is decided by the fitter seed at that point, so 118 ALMs is
+// worth more here than counters nothing reads.
+`ifndef F1SUPERB
 issp_probe #(.INSTANCE_ID("M")) u_issp (
 	.clk(clk_sys),
 	.dl_byte(ioctl_download && ioctl_wr && ioctl_index == 16'd0), .dl_addr_lo(ioctl_addr[15:0]),
@@ -485,15 +585,21 @@ issp_probe #(.INSTANCE_ID("M")) u_issp (
 	.ioctl_wait(ioctl_wait), .ioctl_download(ioctl_download), .pll_locked(pll_locked),
 	.roz_fill(dbg_roz_fill), .roz_hit(dbg_roz_hit), .roz_pen_nz(dbg_roz_pen_nz)
 );
+`endif
 // the video engines' time: which have overrun, how often, and the margins
 issp_video_probe #(.INSTANCE_ID("V")) u_issp_v (
 	.clk(clk_sys),
 	.flags({rot_overflow, bad_pm, fb_ovr, spr_ovr, roz_ovr, bg_ovr, tx_ovr}),
 	.vblank_ev(core_vblank_ev), .spr_ovr_ev(dbg_spr_ovr_ev), .fb_ovr_ev(dbg_fb_ovr_ev), .roz_ovr_ev(dbg_roz_ovr_ev),
 	.copy_done(dbg_copy_done), .spr_frame_cycles(dbg_spr_cycles),
-	.core_reset(reset), .osd_reset(status[0]), .cpu_reset(~core_run),
-	.dsw_reads(dbg_dsw_reads), .dsw_bad(dbg_dsw_bad), .dsw_last_bad(dbg_dsw_last_bad),
-	.ymf_overrun(dbg_ymf_overrun), .ymf_wait_max(dbg_ymf_wait_max), .if_wait_max(dbg_if_wait_max)
+	.ymf_overrun(dbg_ymf_overrun), .ymf_wait_max(dbg_ymf_wait_max), .if_wait_max(dbg_if_wait_max),
+	.road_over(dbg_road_over), .road_ovr(road_ovr), .road_ovr_ev(dbg_road_ovr_ev),
+	.fpu_max(dbg_fpu_max), .fpu_runs(dbg_fpu_runs),
+	.road_vw(dbg_road_vw), .road_lw(dbg_road_lw), .road_lines(dbg_road_lines),
+	.road_pens(dbg_road_pens), .spr_flipx(dbg_spr_flipx), .spr_flipy(dbg_spr_flipy),
+	.spr_drawn(dbg_spr_drawn), .fy_attr(dbg_fy_attr), .fy_idx(dbg_fy_idx),
+	.road_row(dbg_road_row), .road_rowword(dbg_road_rowword),
+	.road_starty(dbg_road_starty), .road_offsy(dbg_road_offsy)
 );
 `endif
 

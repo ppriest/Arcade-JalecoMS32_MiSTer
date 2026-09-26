@@ -411,7 +411,6 @@ initial begin
 	if (flog != 0) $fclose(flog);
 	$display("line RAM: CPU writes %0d in active display, %0d in vblank; same-address writes within 2 clocks of a ROZ read: %0d in %0d frames",
 	         lr_w_act, lr_w_vbl, lr_coll, lr_frames_coll);
-	$display("DIP reads: %0d, not the switch register: %0d (last %08x)", u_core.u_sys.dbg_dsw_reads, u_core.u_sys.dbg_dsw_bad, u_core.u_sys.dbg_dsw_last_bad);
 	$display("object RAM copy: longest %0d clocks (%0d lines of 6144)", cp_max, cp_max / 6144);
 	$display("accesses: all %0d (heaviest frame %0d), work RAM r %0d w %0d (heaviest frame %0d), object RAM r %0d w %0d (heaviest frame %0d), ROM data %0d",
 	         n_all, mx_all, n_wram_r, n_wram_w, mx_wram, n_obj_r, n_obj_w, mx_obj, n_rom);

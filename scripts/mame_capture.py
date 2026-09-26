@@ -52,6 +52,14 @@ REGIONS = {
     "bgscroll": (0xFCE00A20, 0x00018),
     "bgmode":  (0xFCE00A7C, 0x00004),
 }
+# f1superb only: the road plane's map, its per-line registers and its control
+# block (ROADMAP, "F-1 Super Battle"). The addresses are unmapped in every other
+# set, so they are added only for that one.
+REGIONS_F1 = {
+    "roadvram": (0xFDC00000, 0x20000),   # 2048x1 strips: tile and colour per row
+    "roadline": (0xFDE00000, 0x20000),   # 8 u16 per line, as the ROZ line RAM
+    "roadctrl": (0xFCE00800, 0x00060),
+}
 # --wlog taps: the write-only registers, so their last values are recoverable
 WRITE_TAPS = [
     (0xFCE00000, 0xFCE0005F),   # sysctrl (CRTC, irq acks, timer)
@@ -59,6 +67,7 @@ WRITE_TAPS = [
     (0xFCE00200, 0xFCE0027F),   # sprite ctrl
     (0xFCE00600, 0xFCE0065F),   # roz ctrl
     (0xFCE00A00, 0xFCE00A7F),   # scroll, bgmode
+    (0xFCE00800, 0xFCE0085F),   # f1superb road plane control
 ]
 
 
@@ -78,12 +87,16 @@ def main():
     if not MAME_EXE.exists():
         sys.exit(f"MAME not found at {MAME_EXE}; set MAME_DIR / MAME_EXE")
 
+    regions = dict(REGIONS)
+    if a.game == "f1superb":
+        regions.update(REGIONS_F1)
+
     env = dict(os.environ)
     env.update(
         MS32_OUT=out.as_posix(),
         MS32_FRAME=str(a.frame),
         MS32_TAG=a.game,
-        MS32_REGIONS=",".join(f"{n}:{addr:x}:{ln:x}" for n, (addr, ln) in REGIONS.items()),
+        MS32_REGIONS=",".join(f"{n}:{addr:x}:{ln:x}" for n, (addr, ln) in regions.items()),
         MS32_TAPS=",".join(f"{lo:x}:{hi:x}" for lo, hi in WRITE_TAPS) if a.wlog else "",
         MS32_SCRIPT=(repo / "scripts" / "mame" / "capture.lua").as_posix(),
     )

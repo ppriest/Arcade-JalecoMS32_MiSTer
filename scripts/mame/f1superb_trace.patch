@@ -1,0 +1,257 @@
+diff --git a/src/devices/cpu/jalfpu/jalfpu.cpp b/src/devices/cpu/jalfpu/jalfpu.cpp
+index 221a5cfff78..5f2fc62adc8 100644
+--- a/src/devices/cpu/jalfpu/jalfpu.cpp
++++ b/src/devices/cpu/jalfpu/jalfpu.cpp
+@@ -108,6 +108,7 @@ void jaleco_fpu_device::device_start()
+ 	m_running = false;
+ 	m_delay = false;
+ 	m_delay_target = 0;
++	ms32_trace_open();
+ 
+ 	state_add(STATE_GENPC,     "GENPC", m_pc).noshow();
+ 	state_add(STATE_GENPCBASE, "CURPC", m_ppc).noshow();
+@@ -173,6 +174,7 @@ u16 jaleco_fpu_device::host_data_r(offs_t offset)
+ 
+ void jaleco_fpu_device::host_data_w(offs_t offset, u16 data, u16 mem_mask)
+ {
++	ms32_trace_host('d', offset, data);
+ 	COMBINE_DATA(&m_data_ram[offset]);
+ }
+ 
+@@ -184,6 +186,7 @@ u32 jaleco_fpu_device::host_prg_r(offs_t offset)
+ 
+ void jaleco_fpu_device::host_prg_w(offs_t offset, u32 data, u32 mem_mask)
+ {
++	ms32_trace_host('p', offset, data);
+ 	u32 &word = m_prg_ram[offset >> 1];
+ 	if (BIT(offset, 0))
+ 		word = (word & 0xf0000) | (data & mem_mask & 0xffff) | (word & ~mem_mask & 0xffff);
+@@ -209,6 +212,7 @@ u16 jaleco_fpu_device::host_r(offs_t offset)
+ 
+ void jaleco_fpu_device::host_w(offs_t offset, u16 data, u16 mem_mask)
+ {
++	ms32_trace_host('r', offset, data);
+ 	if (offset < 0x10)
+ 	{
+ 		COMBINE_DATA(&m_s[offset]);
+@@ -223,6 +227,7 @@ void jaleco_fpu_device::host_w(offs_t offset, u16 data, u16 mem_mask)
+ 		LOGHOST("%s: start at %03x\n", machine().describe_context(), m_pc);
+ 		m_delay = false;
+ 		m_running = true;
++		ms32_trace_start();
+ 		break;
+ 
+ 	case 0x32:
+@@ -604,6 +609,61 @@ void jaleco_fpu_device::execute_one(u32 op)
+ 	}
+ }
+ 
++// MS32 MiSTer core: the reference trace the RTL transcription in
++// rtl/cpu/jalfpu/jalfpu.sv is checked against. JALFPU_TRACE=<dir> writes, per
++// device: <tag>_prg.bin (program RAM at the first routine start, 1,024 u32),
++// <tag>_run.txt (one line per routine start), <tag>_exec.txt (one line per
++// instruction: ppc, opcode, then the state after it). JALFPU_TRACE_MAX caps
++// the instruction count, default 2,000,000. Not for upstream.
++void jaleco_fpu_device::ms32_trace_open()
++{
++	char const *const dir = getenv("JALFPU_TRACE");
++	if (!dir)
++		return;
++	m_trace_base = std::string(dir) + "/" + std::string(tag()).substr(1);
++	m_trace_exec = fopen((m_trace_base + "_exec.txt").c_str(), "w");
++	m_trace_run = fopen((m_trace_base + "_run.txt").c_str(), "w");
++	char const *const cap = getenv("JALFPU_TRACE_MAX");
++	m_trace_left = cap ? strtoull(cap, nullptr, 0) : 2000000;
++}
++
++void jaleco_fpu_device::ms32_trace_host(char kind, u32 offset, u32 data)
++{
++	if (m_trace_exec && m_trace_left)
++		fprintf(m_trace_exec, "H %c %04X %08X%s", kind, offset, data, "\n");
++}
++
++void jaleco_fpu_device::ms32_trace_state(FILE *f) const
++{
++	for (int i = 0; i < 16; i++)
++		fprintf(f, " %04X", m_s[i]);
++	fprintf(f, " %04X %04X %X %04X %d%s", m_c6, m_c7, m_flags, m_sign, m_sp, "\n");
++}
++
++void jaleco_fpu_device::ms32_trace_start()
++{
++	if (!m_trace_run)
++		return;
++	if (!m_trace_dumped)
++	{
++		m_trace_dumped = true;
++		FILE *g = fopen((m_trace_base + "_prg.bin").c_str(), "wb");
++		if (g)
++		{
++			fwrite(&m_prg_ram[0], 4, 0x400, g);
++			fclose(g);
++		}
++	}
++	fprintf(m_trace_run, "%03X", m_pc);
++	ms32_trace_state(m_trace_run);
++	fflush(m_trace_run);
++	if (m_trace_exec && m_trace_left)
++	{
++		fprintf(m_trace_exec, "S %03X", m_pc);
++		ms32_trace_state(m_trace_exec);
++	}
++}
++
+ void jaleco_fpu_device::execute_run()
+ {
+ 	while (m_icount > 0)
+@@ -626,6 +686,15 @@ void jaleco_fpu_device::execute_run()
+ 
+ 		execute_one(op);
+ 
++		if (m_trace_exec && m_trace_left)
++		{
++			m_trace_left--;
++			fprintf(m_trace_exec, "I %03X %05X", m_ppc, op);
++			ms32_trace_state(m_trace_exec);
++			if (!m_trace_left)
++				fflush(m_trace_exec);
++		}
++
+ 		if (in_delay)
+ 		{
+ 			if (m_delay)
+diff --git a/src/devices/cpu/jalfpu/jalfpu.h b/src/devices/cpu/jalfpu/jalfpu.h
+index a11e3f5624c..14cee2448c7 100644
+--- a/src/devices/cpu/jalfpu/jalfpu.h
++++ b/src/devices/cpu/jalfpu/jalfpu.h
+@@ -76,6 +76,17 @@ private:
+ 	u32 host_prg_r(offs_t offset);
+ 	void host_prg_w(offs_t offset, u32 data, u32 mem_mask = ~0);
+ 
++	// MS32 MiSTer core: reference trace, JALFPU_TRACE=<dir>. Not for upstream.
++	void ms32_trace_open();
++	void ms32_trace_start();
++	void ms32_trace_state(FILE *f) const;
++	void ms32_trace_host(char kind, u32 offset, u32 data);
++	FILE *m_trace_exec = nullptr;
++	FILE *m_trace_run = nullptr;
++	std::string m_trace_base;
++	u64 m_trace_left = 0;
++	bool m_trace_dumped = false;
++
+ 	void set_nz(u16 v);
+ 	bool condition(u8 code);
+ 	u16 mem_addr(u8 mode, u8 base);
+diff --git a/src/mame/jaleco/ms32.cpp b/src/mame/jaleco/ms32.cpp
+index 4318ad0de1e..5987b449446 100644
+--- a/src/mame/jaleco/ms32.cpp
++++ b/src/mame/jaleco/ms32.cpp
+@@ -522,11 +522,13 @@ void ms32_state::ms32_nvram_w8(offs_t offset, u8 data)
+ 
+ u8 ms32_state::ms32_priram_r8(offs_t offset)
+ {
++	g_ms32_trace.note(5, offset);
+ 	return m_priram[offset];
+ }
+ 
+ void ms32_state::ms32_priram_w8(offs_t offset, u8 data)
+ {
++	g_ms32_trace.note(4, offset);
+ 	m_priram[offset] = data;
+ }
+ 
+@@ -686,14 +688,45 @@ void ms32_state::ms32_map(address_map &map)
+ /* F1 Super Battle per-line road plane (F1-93158 board, gfx5 textures): tile row and colour per line at fdc00000,
+    line scroll/zoom at fde00000, control at fce00800 */
+ 
++// MS32 MiSTer core: what the V70 touches, counted natively. A Lua tap on these
++// ranges runs the game at under a frame a second; this costs nothing when
++// MS32_TRACE is unset. Not for upstream.
++ms32_trace_t g_ms32_trace;
++
++void ms32_trace_t::note(int region, u32 offset)
++{
++	if (!enabled)
++		return;
++	auto &r = reg[region];
++	r.count++;
++	if (offset < r.lo) r.lo = offset;
++	if (offset > r.hi) r.hi = offset;
++	r.blocks.insert(offset >> 8);
++}
++
++void ms32_trace_t::dump()
++{
++	char const *const name[] = { "road_vram_w", "road_vram_r", "road_line_w", "road_line_r", "priram_w", "priram_r" };
++	FILE *f = fopen(path.c_str(), "w");
++	if (!f)
++		return;
++	fprintf(f, "region          accesses   lowest  highest  256-byte blocks\n");
++	for (int i = 0; i < 6; i++)
++		fprintf(f, "%-14s %9llu   %06X   %06X  %8u\n", name[i], (unsigned long long)reg[i].count,
++				reg[i].count ? reg[i].lo : 0, reg[i].count ? reg[i].hi : 0, unsigned(reg[i].blocks.size()));
++	fclose(f);
++}
++
+ void ms32_f1superbattle_state::road_vram_w16(offs_t offset, u16 data, u16 mem_mask)
+ {
++	g_ms32_trace.note(0, offset);
+ 	COMBINE_DATA(&m_road_vram[offset]);
+ 	m_extra_tilemap->mark_tile_dirty(offset / 2);
+ }
+ 
+ u16 ms32_f1superbattle_state::road_vram_r16(offs_t offset)
+ {
++	g_ms32_trace.note(1, offset);
+ 	return m_road_vram[offset];
+ }
+ 
+@@ -729,8 +762,8 @@ void ms32_f1superbattle_state::f1superb_map(address_map &map)
+ 
+ 	map(0xfdc00000, 0xfdc1ffff).rw(FUNC(ms32_f1superbattle_state::road_vram_r16), FUNC(ms32_f1superbattle_state::road_vram_w16)).umask32(0x0000ffff);
+ 	map(0xfde00000, 0xfde1ffff).lrw16(
+-			NAME([this] (offs_t offset) { return m_road_lineram[offset]; }),
+-			NAME([this] (offs_t offset, u16 data, u16 mem_mask) { COMBINE_DATA(&m_road_lineram[offset]); })).umask32(0x0000ffff);
++			NAME([this] (offs_t offset) { g_ms32_trace.note(3, offset); return m_road_lineram[offset]; }),
++			NAME([this] (offs_t offset, u16 data, u16 mem_mask) { g_ms32_trace.note(2, offset); COMBINE_DATA(&m_road_lineram[offset]); })).umask32(0x0000ffff);
+ //  map(0xfe202000, 0xfe2fffff).ram(); // vram?
+ }
+ 
+diff --git a/src/mame/jaleco/ms32.h b/src/mame/jaleco/ms32.h
+index 01c282a8494..29c4d9b0ce2 100644
+--- a/src/mame/jaleco/ms32.h
++++ b/src/mame/jaleco/ms32.h
+@@ -16,6 +16,33 @@
+ #include "screen.h"
+ #include "tilemap.h"
+ 
++#include <set>
++#include <string>
++
++// MS32 MiSTer core: native access counters for the regions the core has to
++// provide, enabled by MS32_TRACE=<file>. Costs one compare when unset.
++// Not for upstream.
++struct ms32_trace_t
++{
++	struct one { u64 count = 0; u32 lo = ~u32(0); u32 hi = 0; std::set<u32> blocks; };
++
++	ms32_trace_t()
++	{
++		char const *const p = getenv("MS32_TRACE");
++		if (p) { path = p; enabled = true; }
++	}
++	~ms32_trace_t() { if (enabled) dump(); }
++
++	void note(int region, u32 offset);
++	void dump();
++
++	bool enabled = false;
++	std::string path;
++	one reg[6];
++};
++
++extern ms32_trace_t g_ms32_trace;
++
+ class ms32_base_state : public driver_device
+ {
+ public:

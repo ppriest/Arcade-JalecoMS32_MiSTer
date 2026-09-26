@@ -9,7 +9,8 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 - [Games](#games)
   - [Game Notes](#game-notes)
   - [Supported](#supported)
-  - [Out of scope for now](#out-of-scope-for-now)
+    - [In progress](#in-progress)
+- [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
 - [Installation](#installation)
 - [Status](#status)
@@ -82,11 +83,16 @@ Every set: the joystick Pause button toggles a pause of the main CPU. The pictur
 a merged parent zip. The streams of all twenty sets were checked byte for byte against images built
 from `ROM_START`.
 
+### In progress
+
+| MAME description | State |
+|-|-|
+| F-1 Super Battle | Its own build, `JalecoMS32F1`, from [MAME PR 16135](https://github.com/mamedev/mame/pull/16135). Needs an SDRAM module larger than 32 MB: the set is 56.75 MB. The two FPU coprocessors, the road plane, the priority-RAM mixing and the controls are written and the build closes timing, but it has never been run on a board, so it is here rather than in the list above — `docs/ROADMAP.md`, "F-1 Super Battle" |
+
 ### Out of scope for now
 
 | MAME description | Why |
 |-|-|
-| F-1 Super Battle | 56.75 MB of ROM, does not fit 32 MB; MAME does not run it either |
 | Vs. Janshi Brandnew Stars (dual screen) | Different driver (`bnstars.cpp`) |
 
 ## Hardware

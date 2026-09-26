@@ -24,7 +24,7 @@ from xml.sax.saxutils import escape
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES, CRCS  # noqa: E402
+from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES, CRCS, F1  # noqa: E402
 import extract_dips  # noqa: E402
 import extract_romstart  # noqa: E402
 
@@ -39,23 +39,40 @@ KEY_INDEX = {"ss91022_10": 0, "ss92046_01": 1, "ss92047_01": 2, "ss92048_01": 3}
 # Arcade-JalecoMS32_<date>.rbf; it is renamed without "Arcade-" on install
 # (README, "Installation"), and scripts/deploy.py copies it under that name.
 RBF = "JalecoMS32"
+# f1superb has its own Quartus revision: the road plane and the two FPUs do not fit
+# beside the other sets (ROADMAP, "F-1 Super Battle")
+RBF_F1 = "JalecoMS32F1"
 # The .mra name is MAME's description with " / " as " - " (a file name cannot hold a
 # slash); gametngk's is shortened to the name its first .mra shipped under.
 NAMES = {s: g["name"].replace(" / ", " - ") for s, g in GAMES.items()}
 NAMES["gametngk"] = "The Game Paradise - Master of Shooting! (ver 1.0)"
 # the INPUT_PORTS block each set uses, from its GAME() line
 INPUTS = {s: g["inputs"] for s, g in GAMES.items()}
-# region order in the SDRAM map, with the sizes ms32_sdram_top.sv reserves
+# region order in the SDRAM map, with the sizes ms32_sdram_top.sv reserves. Two maps,
+# as the core has: the 32 MB one every in-scope set uses, and f1superb's 64 MB one
+# (8 MB of ROZ tiles, the 8 MB gfx5 road textures, a 32 MB sprite region).
 MAP = [("maincpu", 0x000_0000, 0x200000), ("txtiles", 0x020_0000, 0x080000), ("bgtiles", 0x028_0000, 0x400000),
        ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1100000), ("audiocpu", 0x1B8_0000, 0x040000),
        ("ymf", 0x1BC_0000, 0x400000)]
+MAP_F1 = [("maincpu", 0x000_0000, 0x200000), ("txtiles", 0x020_0000, 0x080000), ("bgtiles", 0x028_0000, 0x400000),
+          ("roztiles", 0x068_0000, 0x800000), ("gfx5", 0x0E8_0000, 0x800000), ("audiocpu", 0x168_0000, 0x040000),
+          ("ymf", 0x16C_0000, 0x400000), ("sprite", 0x1AC_0000, 0x2000000)]
+
+
+def map_for(game):
+    return MAP_F1 if game == F1 else MAP
 
 
 def check_map():
+    """Both maps, against the bases in ms32_sdram_top.sv: a plain wire is the same in
+    both, `bigmap ? B : A` is the f1superb one and the standard one in that order."""
     src = (REPO / "rtl/memory/ms32_sdram_top.sv").read_text(encoding="utf-8")
-    for name, base, _ in MAP:
-        m = re.search(rf"BASE_{name.upper()}\s*=\s*26'h([0-9A-Fa-f_]+)", src)
-        assert m and int(m.group(1).replace("_", ""), 16) == base, (name, base)
+    for m, which in ((MAP, 1), (MAP_F1, 0)):
+        for name, base, _ in m:
+            r = re.search(rf"BASE_{name.upper()}\s*=\s*(bigmap \? )?26'h([0-9A-Fa-f_]+)(\s*:\s*26'h([0-9A-Fa-f_]+))?", src)
+            assert r, name
+            got = r.group(4) if (r.group(1) and which) else r.group(2)
+            assert int(got.replace("_", ""), 16) == base, (name, base, got)
 
 
 def region_xml(region, size, parts, crc):
@@ -114,31 +131,40 @@ def uses_mahjong(game):
 def switches_xml(game):
     """<switches> for the DSW word at 0xFCC00010: MS32.sv takes index 254 as four
     bytes, low first, so bit b of the word is dip bit b. A bit no switch covers
-    reads 1 (every DIP line is pulled up, all ports IP_ACTIVE_LOW)."""
+    reads 1 (every DIP line is pulled up, all ports IP_ACTIVE_LOW).
+
+    f1superb has a second bank as well, DSW2 on the MB-93159 board, read at
+    0xFD0D0000. It goes in the same stream as bytes 4-7, so its switches sit at
+    bit 32 and up and the F1SUPERB build stores eight bytes rather than four."""
     blocks = extract_dips.load()
     missing = set()
     ports = extract_dips.parse_ports(blocks[INPUTS[game]], blocks, missing)
     if missing:
         sys.exit(f"{game}: DEF_STR missing from extract_dips: {sorted(missing)}")
-    default = 0xFFFFFFFF
+    banks = [("DSW", 0)] + ([("DSW2", 32)] if game == "f1superb" else [])
+    default = (1 << (32 * len(banks))) - 1
     dips = []
-    for name, mask, dflt, settings in sorted(ports["DSW"], key=lambda d: (d[1] & -d[1])):   # OSD in bit order
-        default = (default & ~mask) | (dflt & mask)
-        if settings is None:
-            continue
-        pos = [b for b in range(32) if mask & (1 << b)]
-        ids = []
-        for idx in range(1 << len(pos)):
-            value = sum(1 << bp for j, bp in enumerate(pos) if idx & (1 << j))
-            ids.append(settings.get(value, "-"))
-        if any("," in i for i in ids):
-            sys.exit(f"{game}: dip {name!r} has a comma in a label")
-        dips.append(f'    <dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>')
-    dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4))
+    for port, shift in banks:
+        for name, mask, dflt, settings in sorted(ports[port], key=lambda d: (d[1] & -d[1])):   # OSD in bit order
+            default = (default & ~(mask << shift)) | ((dflt & mask) << shift)
+            if settings is None:
+                continue
+            bits = [b for b in range(32) if mask & (1 << b)]
+            pos = [b + shift for b in bits]
+            ids = []
+            for idx in range(1 << len(bits)):
+                value = sum(1 << bp for j, bp in enumerate(bits) if idx & (1 << j))
+                ids.append(settings.get(value, "-"))
+            if any("," in i for i in ids):
+                sys.exit(f"{game}: dip {name!r} has a comma in a label")
+            dips.append(f'    <dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>')
+    dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4 * len(banks)))
     return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
 
 
-# sets with a known game-breaking fault, kept out of the main list (README, Status)
+# sets kept out of the main list: a known game-breaking fault (README, Status).
+# f1superb joins them there for a different reason -- its JalecoMS32F1 build does
+# not exist yet -- and moves out when it does.
 UNSUPPORTED = {"wpksocv2"}
 
 
@@ -157,7 +183,7 @@ def main():
         parent = PARENT.get(game)
         if cap:
             out_dir = REPO / "releases" / "_dev"
-        elif game in UNSUPPORTED:
+        elif game in UNSUPPORTED or game == F1:
             out_dir = REPO / "releases" / "unsupported"
         elif parent in SETS:
             out_dir = REPO / "releases" / "_alternatives" / f"_{NAMES[parent]}"
@@ -173,16 +199,17 @@ def main():
                f"  <setname>{game}</setname>",
                f"  <year>{GAMES[game]['year']}</year>",
                f"  <manufacturer>{esc(GAMES[game]['maker'])}</manufacturer>",
-               f"  <rbf>{RBF}</rbf>",
+               f"  <rbf>{RBF_F1 if game == F1 else RBF}</rbf>",
                "  <mameversion>0286</mameversion>"]
         xml += switches_xml(game)
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.
         key = KEY_INDEX[SET_KEY[game]]
         spr_size = by_name["sprite"][0]
         mod = (key | (0x04 if game in INVERT_LINES else 0) | (0x08 if game in ROT270 else 0)
-               | (0x10 if spr_size > 0x1000000 else 0) | (0x20 if uses_mahjong(game) else 0) | (0x80 if cap else 0))
+               | (0x10 if spr_size > 0x1000000 else 0) | (0x20 if uses_mahjong(game) else 0)
+               | (0x40 if game == F1 else 0) | (0x80 if cap else 0))
         xml.append(f'  <rom index="1"><part>{mod:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]}'
-                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", mahjong keys" if uses_mahjong(game) else ""}{", CPU held" if cap else ""} -->')
+                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", mahjong keys" if uses_mahjong(game) else ""}{", 64 MB map" if game == F1 else ""}{", CPU held" if cap else ""} -->')
         zips = f"{game}.zip" + (f"|{PARENT[game]}.zip" if game in PARENT else "")
         # address: the HPS writes the image into DDR3 and ms32_rom_loader copies it to SDRAM
         # (MS32.sv, "FAST ROM LOAD"). Not for capture playback: the copy holds the video
@@ -190,7 +217,7 @@ def main():
         addr = '' if cap else ' address="0x30000000"'
         xml.append(f'  <rom index="0" zip="{zips}" md5="none"{addr}>')
         pos = 0
-        for region, base, rsize in MAP:
+        for region, base, rsize in map_for(game):
             if region not in by_name:
                 sys.exit(f"{game}: no {region} region in SETS")
             size, parts = by_name[region]

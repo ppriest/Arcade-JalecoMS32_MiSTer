@@ -21,7 +21,7 @@
 // The sprite region is 17 MB for bbbxing, the one set whose sprite ROM is
 // larger than 16 MB. Every other set masks sprite addresses to 24 bits, which
 // with the .mra's repeat is MAME's page wrap for any power-of-two ROM up to
-// 16 MB; spr25 (mod byte bit 4, bbbxing only) masks to 25 bits instead.
+// 16 MB; spr25 (mod byte bit 4, bbbxing and f1superb) masks to 25 bits instead.
 //
 // PORTS -- sdram.sv's three ports are FIXED PRIORITY 0 > 1 > 2 on one chip:
 //   port 0   TX, BG and ROZ tile fetch (arbiter of 3): the hardest deadline, one line of lead
@@ -70,11 +70,14 @@ module ms32_sdram_top (
 	output wire         ioctl_wait,
 	input  wire  [1:0]  key,            // decryption key select (mod byte)
 	input  wire         spr25,          // 25-bit sprite address mask (mod byte bit 4)
+	input  wire         bigmap,         // F-1 Super Battle's 64 MB map (mod byte bit 6)
 
 	// tile engines: region-local byte address of an 8-byte granule
 	input  wire         tx_req,  input wire [23:0] tx_addr,  output wire tx_valid,  output wire [63:0] tx_data,
 	input  wire         bg_req,  input wire [23:0] bg_addr,  output wire bg_valid,  output wire [63:0] bg_data,
 	input  wire         roz_req, input wire [23:0] roz_addr, output wire roz_valid, output wire [63:0] roz_data,
+	// F-1 Super Battle's road textures, the fourth client on the tile port
+	input  wire         gfx5_req, input wire [23:0] gfx5_addr, output wire gfx5_valid, output wire [63:0] gfx5_data,
 	input  wire         spr_req, input wire [27:0] spr_addr, output wire spr_valid, output wire [63:0] spr_data,
 
 	// V70 instruction fetch: one 8-byte granule, region-local
@@ -100,17 +103,25 @@ module ms32_sdram_top (
 
 	import ms32_jalcrpt_pkg::*;
 
-	localparam logic [25:0] BASE_MAINCPU  = 26'h000_0000;
-	localparam logic [25:0] BASE_TXTILES  = 26'h020_0000;
-	localparam logic [25:0] BASE_BGTILES  = 26'h028_0000;
-	localparam logic [25:0] BASE_ROZTILES = 26'h068_0000;
-	localparam logic [25:0] BASE_SPRITE   = 26'h0A8_0000;
-	localparam logic [25:0] BASE_AUDIOCPU = 26'h1B8_0000;
-	localparam logic [25:0] BASE_YMF      = 26'h1BC_0000;
-	localparam logic [25:0] BASE_OBJRAM   = 26'h1FC_0000;
+	// Two region maps, chosen by bigmap; scripts/build_mra.py reads both from
+	// here and lays each .mra out to match (its MAP / MAP_F1, checked at build).
+	// The 32 MB map holds every set up to 30.75 MB. F-1 Super Battle is 56.75 MB
+	// and needs a larger module: its ROZ region is 8 MB rather than 4, it adds
+	// the 8 MB gfx5 road textures, and its sprite region is 32 MB, so everything
+	// after the ROZ tiles moves (ROADMAP, "F-1 Super Battle").
+	wire [25:0] BASE_MAINCPU  = 26'h000_0000;
+	wire [25:0] BASE_TXTILES  = 26'h020_0000;
+	wire [25:0] BASE_BGTILES  = 26'h028_0000;
+	wire [25:0] BASE_ROZTILES = 26'h068_0000;
+	wire [25:0] BASE_GFX5     = 26'h0E8_0000;                          // f1superb only
+	wire [25:0] BASE_AUDIOCPU = bigmap ? 26'h168_0000 : 26'h1B8_0000;
+	wire [25:0] BASE_YMF      = bigmap ? 26'h16C_0000 : 26'h1BC_0000;
+	wire [25:0] BASE_SPRITE   = bigmap ? 26'h1AC_0000 : 26'h0A8_0000;
+	wire [25:0] BASE_OBJRAM   = bigmap ? 26'h3FC_0000 : 26'h1FC_0000;  // above the ROM image
 	localparam logic [23:0] MASK_TX  = 24'h07_FFFF;
 	localparam logic [23:0] MASK_BG  = 24'h3F_FFFF;
-	localparam logic [23:0] MASK_ROZ = 24'h3F_FFFF;
+	wire       [23:0] mask_roz = bigmap ? 24'h7F_FFFF : 24'h3F_FFFF;
+	localparam logic [23:0] MASK_GFX5 = 24'h7F_FFFF;   // f1superb's 8 MB of road strips
 	wire       [24:0] mask_spr = spr25 ? 25'h1FF_FFFF : 25'h0FF_FFFF;
 
 	// ------------------------------------------------------------ download
@@ -195,33 +206,36 @@ module ms32_sdram_top (
 	endgenerate
 
 	// ---------------------------------------------- request latches (level until valid)
-	logic tx_l, bg_l, roz_l, spr_l, if_l;
+	logic tx_l, bg_l, roz_l, gfx5_l, spr_l, if_l;
 	always_ff @(posedge clk) begin
-		if (reset) begin tx_l <= 1'b0; bg_l <= 1'b0; roz_l <= 1'b0; spr_l <= 1'b0; if_l <= 1'b0; end
+		if (reset) begin tx_l <= 1'b0; bg_l <= 1'b0; roz_l <= 1'b0; gfx5_l <= 1'b0; spr_l <= 1'b0; if_l <= 1'b0; end
 		else begin
 			if (tx_valid)  tx_l  <= 1'b0; else if (tx_req)  tx_l  <= 1'b1;
 			if (bg_valid)  bg_l  <= 1'b0; else if (bg_req)  bg_l  <= 1'b1;
 			if (roz_valid) roz_l <= 1'b0; else if (roz_req) roz_l <= 1'b1;
+			if (gfx5_valid) gfx5_l <= 1'b0; else if (gfx5_req) gfx5_l <= 1'b1;
 			if (spr_valid) spr_l <= 1'b0; else if (spr_req) spr_l <= 1'b1;
 			if (if_valid)  if_l  <= 1'b0; else if (if_req)  if_l  <= 1'b1;
 		end
 	end
 
 	// ------------------------------------------------------ port 0: tiles
-	wire [2:0]  arb0_valid;
+	wire [3:0]  arb0_valid;
 	wire [63:0] arb0_rdata;
-	assign tx_valid  = arb0_valid[0];  assign tx_data  = arb0_rdata;
-	assign bg_valid  = arb0_valid[1];  assign bg_data  = arb0_rdata;
-	assign roz_valid = arb0_valid[2];  assign roz_data = arb0_rdata;
-	sdram_arbiter #(.N(3)) u_arb0 (
+	assign tx_valid   = arb0_valid[0];  assign tx_data   = arb0_rdata;
+	assign bg_valid   = arb0_valid[1];  assign bg_data   = arb0_rdata;
+	assign roz_valid  = arb0_valid[2];  assign roz_data  = arb0_rdata;
+	assign gfx5_valid = arb0_valid[3];  assign gfx5_data = arb0_rdata;
+	sdram_arbiter #(.N(4)) u_arb0 (
 		.clk(clk), .reset(reset),
 		.phy_req(phy_req[0]), .phy_we(phy_we[0]), .phy_we16(phy_we16[0]),
 		.phy_addr(phy_addr[0]), .phy_wdata(phy_wdata[0]),
 		.phy_busy(phy_busy[0]), .phy_valid(phy_valid[0]), .phy_rdata(phy_rdata[0]),
-		.c_req({roz_l, bg_l, tx_l}),
-		.c_addr({BASE_ROZTILES + {2'd0, roz_addr & MASK_ROZ},
-		         BASE_BGTILES  + {2'd0, bg_addr  & MASK_BG},
-		         BASE_TXTILES  + {2'd0, tx_addr  & MASK_TX}}),
+		.c_req({gfx5_l, roz_l, bg_l, tx_l}),
+		.c_addr({BASE_GFX5     + {2'd0, gfx5_addr & MASK_GFX5},
+		         BASE_ROZTILES + {2'd0, roz_addr  & mask_roz},
+		         BASE_BGTILES  + {2'd0, bg_addr   & MASK_BG},
+		         BASE_TXTILES  + {2'd0, tx_addr   & MASK_TX}}),
 		.c_valid(arb0_valid), .c_rdata(arb0_rdata),
 		.dl_req(1'b0), .dl_addr(26'd0), .dl_data(16'd0), .dl_we16(1'b0), .dl_busy()
 	);

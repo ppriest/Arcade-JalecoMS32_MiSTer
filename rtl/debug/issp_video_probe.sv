@@ -15,15 +15,28 @@
 //   [102:79] latest object RAM copy finish after vblank start, clocks
 //   [118:103] frames (vblank starts)
 //   [134:119] frame count at the last late ROZ line
-//   [150:135] resets seen (rises of the core's composite reset)
-//   [174:151] length of the last reset, clocks (saturating)
-//   [190:175] OSD reset (status[0]) rises
-//   [206:191] V70 reset rises as ms32_cpu_sys sees it (clk_sys copy of its reset)
-//   [222:207] V70 32-bit reads of the DIP switches   [238:223] of them not the switch register
-//   [270:239] the last such value   (these three from clk_cpu: sampled, not synchronised)
-//   [286:271] YMF271 passes that missed their tick (since reset)
-//   [302:287] longest YMF271 sample fetch wait for SDRAM, clocks (since reset)
-//   [318:303] longest V70 instruction fetch wait for SDRAM, clocks (since reset)
+//   [150:135] YMF271 passes that missed their tick (since reset)
+//   [166:151] longest YMF271 sample fetch wait for SDRAM, clocks (since reset)
+//   [182:167] longest V70 instruction fetch wait for SDRAM, clocks (since reset)
+//   [198:183] F-1 Super Battle: V70 writes past the road RAMs, which alias (0 elsewhere)
+//   [199]     F-1 Super Battle: the road line plane has overrun a line (sticky)
+//   [215:200] road lines not finished before display
+//   [235:216] F-1 Super Battle: longest FPU routine, clk_cpu clocks (a frame is 333,333)
+//   [251:236] FPU routines started   (both from clk_cpu: sampled, not synchronised)
+//   [267:252] road map writes   [283:268] road line RAM writes (clk_cpu, saturating)
+//   [299:284] road lines the plane drew in the last frame (0 = every line blank)
+//   [315:300] non-zero road pens written in the last frame (0 = the ROM gives nothing)
+//   [328:316] sprites drawn with flipx   [341:329] with flipy, last frame
+//   [354:342] sprites drawn, last frame
+//   [370:355] the first flipy sprite's attribute word   [382:371] its slot
+//   [392:383] the row the road plane last selected  [408:393] what vram[2 row] gave
+//   [424:409] road_ctrl[2] (starty)   [440:425] road_ctrl[13] (offsy)
+//
+// Removed once they had answered their question rather than carried: the reset
+// counts and lengths (c524b91, for whether the board's OSD Reset reaches the
+// core -- it does) and the V70's DIP switch reads (557d2e8, for The Game
+// Paradise's one-frame Japanese logo). 136 bits and their counters.
+// New fields go on the TOP of the bus: the offsets above are in read_issp.tcl.
 // Source bit 0 clears the counts and maxima (the sticky flags clear with the core's reset).
 module issp_video_probe #(
 	parameter [7:0] INSTANCE_ID = "V"
@@ -36,20 +49,30 @@ module issp_video_probe #(
 	input logic        roz_ovr_ev,
 	input logic        copy_done,
 	input logic [23:0] spr_frame_cycles,
-	input logic        core_reset,
-	input logic        osd_reset,
-	input logic        cpu_reset,
-	input logic [15:0] dsw_reads,
-	input logic [15:0] dsw_bad,
-	input logic [31:0] dsw_last_bad,
 	input logic [15:0] ymf_overrun,
 	input logic [15:0] ymf_wait_max,
-	input logic [15:0] if_wait_max
+	input logic [15:0] if_wait_max,
+	input logic [15:0] road_over,
+	input logic        road_ovr,
+	input logic        road_ovr_ev,
+	input logic [19:0] fpu_max,
+	input logic [15:0] fpu_runs,
+	input logic [15:0] road_vw,
+	input logic [15:0] road_lw,
+	input logic [15:0] road_lines,
+	input logic [15:0] road_pens,
+	input logic [12:0] spr_flipx,
+	input logic [12:0] spr_flipy,
+	input logic [12:0] spr_drawn,
+	input logic [15:0] fy_attr,
+	input logic [11:0] fy_idx,
+	input logic [9:0]  road_row,
+	input logic [15:0] road_rowword,
+	input logic [15:0] road_starty,
+	input logic [15:0] road_offsy
 );
 
-	logic [15:0] c_spr, c_fb, c_roz, c_frames, roz_last, c_rst, c_osd, c_cpu;
-	logic [23:0] rst_len, rst_cnt;
-	logic        rst_d, osd_d, cpu_d;
+	logic [15:0] c_spr, c_fb, c_roz, c_road, c_frames, roz_last;
 	logic [23:0] max_spr, max_copy, since_vbl;
 	logic        clear;
 
@@ -59,35 +82,29 @@ module issp_video_probe #(
 
 	always_ff @(posedge clk) begin
 		since_vbl <= vblank_ev ? 24'd0 : (since_vbl == 24'hFFFFFF ? since_vbl : since_vbl + 24'd1);
-		rst_d <= core_reset; osd_d <= osd_reset; cpu_d <= cpu_reset;
-		if (core_reset) rst_cnt <= (rst_cnt == 24'hFFFFFF) ? rst_cnt : rst_cnt + 24'd1;
-		else rst_cnt <= 24'd0;
 		if (clear) begin
-			c_spr <= '0; c_fb <= '0; c_roz <= '0; c_frames <= '0; max_spr <= '0; max_copy <= '0;
-			roz_last <= '0; c_rst <= '0; c_osd <= '0; c_cpu <= '0; rst_len <= '0;
+			c_spr <= '0; c_fb <= '0; c_roz <= '0; c_road <= '0; c_frames <= '0; max_spr <= '0; max_copy <= '0;
+			roz_last <= '0;
 		end else begin
 			c_spr    <= sat(c_spr,    spr_ovr_ev);
 			c_fb     <= sat(c_fb,     fb_ovr_ev);
 			c_roz    <= sat(c_roz,    roz_ovr_ev);
+			c_road   <= sat(c_road,   road_ovr_ev);
 			c_frames <= sat(c_frames, vblank_ev);
 			if (spr_frame_cycles > max_spr) max_spr <= spr_frame_cycles;
 			if (copy_done && since_vbl > max_copy) max_copy <= since_vbl;
 			if (roz_ovr_ev) roz_last <= c_frames;
-			c_rst <= sat(c_rst, core_reset && !rst_d);
-			c_osd <= sat(c_osd, osd_reset && !osd_d);
-			c_cpu <= sat(c_cpu, cpu_reset && !cpu_d);
-			if (!core_reset && rst_d) rst_len <= rst_cnt;
 		end
 	end
 
-	wire [318:0] probe_bus = {if_wait_max, ymf_wait_max, ymf_overrun, dsw_last_bad, dsw_bad, dsw_reads, c_cpu, c_osd, rst_len, c_rst, roz_last, c_frames, max_copy, max_spr, c_roz, c_fb, c_spr, flags};
+	wire [440:0] probe_bus = {road_offsy, road_starty, road_rowword, road_row, fy_idx, fy_attr, spr_drawn, spr_flipy, spr_flipx, road_pens, road_lines, road_lw, road_vw, fpu_runs, fpu_max, c_road, road_ovr, road_over, if_wait_max, ymf_wait_max, ymf_overrun, roz_last, c_frames, max_copy, max_spr, c_roz, c_fb, c_spr, flags};
 	wire [0:0]   source_bus;
 	assign clear = source_bus[0];
 
 	altsource_probe #(
 		.sld_auto_instance_index("YES"),
 		.instance_id(INSTANCE_ID),
-		.probe_width(319),
+		.probe_width(441),
 		.source_width(1),
 		.source_initial_value("0"),
 		.enable_metastability("NO"),

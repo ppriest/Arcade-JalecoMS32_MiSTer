@@ -9,6 +9,8 @@
 // core adds 0x40 to the vector itself. Sources and the levels they set:
 //   0  programmable timer        (jaleco_ms32_sysctrl prg_timer_cb)
 //   1  sound CPU wrote to_main   (cleared by reading 0xFD000000)
+//   2  f1superb FPU 1           (level: the FPU halts, the host clears it)
+//   5  f1superb FPU 0
 //   9  field, 30 Hz              (vblank with invert_lines)
 //   10 vblank                    (field with invert_lines)
 // Acks are writes to the sysctrl block (byte offsets into 0xFCE00000; the
@@ -35,6 +37,8 @@ module ms32_sysctrl #(
 	input  logic        field_ev,
 	input  logic        sound_irq_set, // to_main written
 	input  logic        sound_irq_clr, // 0xFD000000 read
+	input  logic        fpu0_irq,      // f1superb: level, straight into bit 5
+	input  logic        fpu1_irq,      //           and bit 2; tied low elsewhere
 
 	output logic        irq_n,
 	output logic [7:0]  irq_vector
@@ -102,6 +106,10 @@ module ms32_sysctrl #(
 		// write clearing bit 3, or an interval write while disabled
 		if (w_tack || (w_ctrl && !wr_data[3]) || (w_intv && !timer_en)) clr_m[0] = 1'b1;
 		if (sound_irq_clr) clr_m[1] = 1'b1;
+		// fpu0_irq_w / fpu1_irq_w are irq_raise(level, state) with the FPU's
+		// own line as the state, so the level simply follows it
+		if (fpu0_irq) set_m[5] = 1'b1; else clr_m[5] = 1'b1;
+		if (fpu1_irq) set_m[2] = 1'b1; else clr_m[2] = 1'b1;
 		if (w_vack || w_iack) clr_m[10] = 1'b1;
 		if (w_fack || w_iack) clr_m[9]  = 1'b1;
 	end

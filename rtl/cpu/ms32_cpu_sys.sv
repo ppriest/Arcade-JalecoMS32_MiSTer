@@ -104,6 +104,19 @@ module ms32_cpu_sys #(
 	output logic [12:0] bgram_addr,  output logic bgram_wel,  output logic bgram_weh,  input logic [15:0] bgram_rdata,
 	output logic [14:0] rozram_addr, output logic rozram_wel, output logic rozram_weh, input logic [15:0] rozram_rdata,
 	output logic [10:0] lineram_addr,output logic lineram_wel,output logic lineram_weh,input logic [15:0] lineram_rdata,
+	// F1SUPERB: the road plane's map and line RAM (ms32_video sizes them to
+	// what the game uses), and a count of any write that reaches past them
+	output logic [9:0]  roadvram_addr, output logic roadvram_wel, output logic roadvram_weh, input logic [15:0] roadvram_rdata,
+	output logic [10:0] roadline_addr, output logic roadline_wel, output logic roadline_weh, input logic [15:0] roadline_rdata,
+	output logic [15:0] dbg_road_over,
+	output logic [15:0] dbg_road_vw, dbg_road_lw,   // F1SUPERB: road map / line RAM writes
+	output logic [19:0] dbg_fpu_max,                 // F1SUPERB: longest FPU routine, clk_cpu clocks
+	output logic [15:0] dbg_fpu_runs,                // F1SUPERB: FPU routines started
+	// F1SUPERB: the analog controls, already in clk_cpu
+	input  logic [7:0]  analog_wheel,
+	input  logic [7:0]  analog_accel,
+	input  logic [7:0]  analog_an2,
+	input  logic [31:0] dsw2,
 	output logic [15:0] palram_addr, output logic palram_wel, output logic palram_weh, input logic [15:0] palram_rdata,
 	output logic [12:0] priram_addr, output logic priram_we,                            input logic [7:0]  priram_rdata,
 	output logic [15:0] vram_wdata,
@@ -111,12 +124,7 @@ module ms32_cpu_sys #(
 	// clk_cpu: debug
 	output logic [31:0] dbg_pc,
 	output logic [31:0] dbg_accesses,
-	output logic [31:0] dbg_cache_hits, dbg_cache_misses,
-	// clk_cpu: the V70's 32-bit reads of the DIP switches at 0xFCC00010 as the
-	// core sees them (after ms32_v70_bus), those that differ from the switch
-	// register, and the last such value
-	output logic [15:0] dbg_dsw_reads, dbg_dsw_bad,
-	output logic [31:0] dbg_dsw_last_bad
+	output logic [31:0] dbg_cache_hits, dbg_cache_misses
 );
 
 	// ------------------------------------------------------------- resets
@@ -216,6 +224,14 @@ module ms32_cpu_sys #(
 	wire is_lineram = (am[31:21] == 11'b1100_0010_001);          // c2200000
 	wire is_objram  = (am[31:21] == 11'b1100_0010_100);          // c2800000
 	wire is_txbg    = (am[31:21] == 11'b1100_0010_110);          // c2c00000
+	// F-1 Super Battle's own devices (f1superb_map): the mask folds fd/fe to c1/c2
+	wire is_roadv   = (am[31:21] == 11'b1100_0001_110);          // fdc00000
+	wire is_roadl   = (am[31:21] == 11'b1100_0001_111);          // fde00000
+	wire is_fpu0    = (am[31:16] == 16'hc110);                   // fd100000, 0x6000 window
+	wire is_fpu1    = (am[31:16] == 16'hc114);                   // fd140000
+	wire is_comms   = (am[31:16] == 16'hc10c) && !am[15:12];     // fd0c0000-fd0c0fff, 4 KB
+	wire is_dsw2    = (am[31:16] == 16'hc10d);                   // fd0d0000
+	wire is_analog  = (am[31:16] == 16'hc10e);                   // fd0e0000
 	wire is_tx      = is_txbg && !a[15];
 	wire is_bg      = is_txbg &&  a[15];
 	wire is_regs    = (a[31:12] == 20'hfce00);
@@ -233,11 +249,12 @@ module ms32_cpu_sys #(
 
 	typedef enum logic [4:0] {
 		R_NONE, R_ROM, R_WRAM, R_NVRAM, R_PRI, R_PAL, R_ROZ, R_LINE, R_OBJ, R_TX, R_BG, R_REGS, R_IN, R_DSW, R_SND,
+		R_ROADV, R_ROADL, R_FPU, R_COMMS, R_DSW2, R_ANALOG,
 		R_ALLF, R_CMDRD
 	} region_t;
 	region_t rsel;
 
-	typedef enum logic [2:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN, B_SPIN, B_OBJ, B_OBJW, B_OBJR} bst_t;
+	typedef enum logic [3:0] {B_IDLE, B_ACK, B_ROM, B_DRAIN, B_SPIN, B_OBJ, B_OBJW, B_OBJR, B_FPU} bst_t;
 	logic [9:0] spin_cnt;
 	bst_t bst;
 	wire accept = (bst == B_IDLE) && m_req && !m_ack && (!pause || ld_owns);
@@ -292,6 +309,20 @@ module ms32_cpu_sys #(
 	assign lineram_addr = a[12:2];  assign lineram_wel = wr && is_lineram && lanes16[0]; assign lineram_weh = wr && is_lineram && lanes16[1];
 	assign palram_addr  = a[17:2];  assign palram_wel  = wr && is_palram  && lanes16[0]; assign palram_weh  = wr && is_palram  && lanes16[1];
 	assign priram_addr  = a[14:2];  assign priram_we   = wr && is_priram  && m_be[0];
+	// The road RAMs hold what the game uses, not what MAME declares; a write
+	// past the end wraps, and is counted so the probe can say it happened.
+	assign roadvram_addr = a[11:2];  assign roadvram_wel = wr && is_roadv && lanes16[0]; assign roadvram_weh = wr && is_roadv && lanes16[1];
+	assign roadline_addr = a[12:2];  assign roadline_wel = wr && is_roadl && lanes16[0]; assign roadline_weh = wr && is_roadl && lanes16[1];
+	always_ff @(posedge clk_cpu) begin
+		if (rst) begin dbg_road_vw <= 16'd0; dbg_road_lw <= 16'd0; end
+		else begin
+			if (wr && is_roadv && dbg_road_vw != 16'hffff) dbg_road_vw <= dbg_road_vw + 16'd1;
+			if (wr && is_roadl && dbg_road_lw != 16'hffff) dbg_road_lw <= dbg_road_lw + 16'd1;
+		end
+		if (rst) dbg_road_over <= 16'd0;
+		else if (wr && ((is_roadv && |a[16:12]) || (is_roadl && |a[16:13])) && dbg_road_over != 16'hffff)
+			dbg_road_over <= dbg_road_over + 16'd1;
+	end
 
 	// ------------------------------------------------------------- inputs
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
@@ -386,11 +417,79 @@ module ms32_cpu_sys #(
 		.d_req(obj_req), .d_addr(obj_addr), .d_valid(obj_valid), .d_rdata(obj_rdata)
 	);
 
+	// ------------------------------------------------------- F1SUPERB devices
+	// The two maths coprocessors sit on this bus with a two-cycle window
+	// (rtl/cpu/jalfpu), so a read or a write to them waits in B_FPU. The comms
+	// RAM is the link board's, which is not emulated -- MAME keeps the RAM and
+	// so does this, or the game's test mode reports FLAM ERROR.
+	logic        fpu_req, fpu_we;
+	logic [15:0] fpu_rdata0, fpu_rdata1, fpu_rdata;
+	logic        fpu_valid0, fpu_valid1;
+	wire         fpu_valid = (fpu_valid0 | fpu_valid1);
+	wire         fpu_irq0, fpu_irq1;
+	wire         fpu_busy0, fpu_busy1;
+`ifdef F1SUPERB
+	jalfpu u_fpu0 (
+		.clk(clk_cpu), .rst(rst),
+		.h_req(fpu_req && is_fpu0), .h_we(fpu_we), .h_addr(a[14:0]), .h_wdata(m_wdata[15:0]),
+		.h_rdata(fpu_rdata0), .h_valid(fpu_valid0), .irq(fpu_irq0), .busy(fpu_busy0),
+		.dbg_stall(1'b0), .dbg_retire(), .dbg_ppc(), .dbg_op(), .dbg_s(),
+		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp()
+	);
+	jalfpu u_fpu1 (
+		.clk(clk_cpu), .rst(rst),
+		.h_req(fpu_req && is_fpu1), .h_we(fpu_we), .h_addr(a[14:0]), .h_wdata(m_wdata[15:0]),
+		.h_rdata(fpu_rdata1), .h_valid(fpu_valid1), .irq(fpu_irq1), .busy(fpu_busy1),
+		.dbg_stall(1'b0), .dbg_retire(), .dbg_ppc(), .dbg_op(), .dbg_s(),
+		.dbg_c6(), .dbg_c7(), .dbg_sign(), .dbg_flags(), .dbg_sp()
+	);
+	assign fpu_rdata = fpu_valid0 ? fpu_rdata0 : fpu_rdata1;
+
+	// How long the FPUs hold the game up. One counter over "either is busy":
+	// that is the window the V70 actually waits through, and against a frame
+	// (333,333 clk_cpu clocks at 20 MHz) it is the only check on the rate
+	// CE_DIV picks, the real chip's clock being unknown. 20 bits is 52 ms, far
+	// past anything the game can wait for.
+	wire         fpu_busy = fpu_busy0 | fpu_busy1;
+	logic [19:0] fpu_run;
+	logic        fpu_busy_d;
+	always_ff @(posedge clk_cpu) begin
+		fpu_busy_d <= fpu_busy;
+		fpu_run <= fpu_busy ? (fpu_run == 20'hFFFFF ? fpu_run : fpu_run + 20'd1) : 20'd0;
+		if (rst) begin
+			dbg_fpu_max <= 20'd0; dbg_fpu_runs <= 16'd0;
+		end else begin
+			if (!fpu_busy && fpu_busy_d && fpu_run > dbg_fpu_max) dbg_fpu_max <= fpu_run;
+			if (fpu_busy && !fpu_busy_d && dbg_fpu_runs != 16'hFFFF) dbg_fpu_runs <= dbg_fpu_runs + 16'd1;
+		end
+	end
+
+	// 1,024 longs, FULL 32-bit. ms32.cpp maps this one as plain .ram() with no
+	// umask32, unlike every other 16-bit region on this bus, so a 16-bit RAM
+	// here drops the top half of every write. Same M10K either way: 32 Kbit.
+	logic [31:0] comms [0:1023];
+	logic [31:0] comms_q;
+	always_ff @(posedge clk_cpu) begin
+		for (int i = 0; i < 4; i++) if (wr && is_comms && m_be[i]) comms[a[11:2]][8*i +: 8] <= m_wdata[8*i +: 8];
+		comms_q <= comms[a[11:2]];
+	end
+`else
+	assign fpu_rdata  = 16'd0;
+	assign fpu_valid0 = 1'b0;
+	assign fpu_valid1 = 1'b0;
+	assign fpu_irq0   = 1'b0;
+	assign fpu_irq1   = 1'b0;
+	assign fpu_busy0  = 1'b0;
+	assign fpu_busy1  = 1'b0;
+	always_comb begin dbg_fpu_max = 20'd0; dbg_fpu_runs = 16'd0; end
+	wire [31:0] comms_q = 32'd0;
+`endif
+
 	// ------------------------------------------------------------- bus FSM
 	always_ff @(posedge clk_cpu) begin
 		m_ack <= 1'b0;
 		if (rst) begin
-			bst <= B_IDLE; d_req <= 1'b0; o_req <= 1'b0; dbg_accesses <= 32'd0;
+			bst <= B_IDLE; d_req <= 1'b0; o_req <= 1'b0; fpu_req <= 1'b0; dbg_accesses <= 32'd0;
 		end else case (bst)
 			B_IDLE: if (accept) begin
 				dbg_accesses <= dbg_accesses + 32'd1;
@@ -398,8 +497,11 @@ module ms32_cpu_sys #(
 				        is_palram ? R_PAL : is_rozram ? R_ROZ : is_lineram ? R_LINE : is_objram ? R_OBJ :
 				        is_tx ? R_TX : is_bg ? R_BG : (is_regs && regs_rd) ? R_REGS :
 				        is_inputs ? R_IN : is_dsw ? R_DSW : is_sndres ? R_SND :
+				        is_roadv ? R_ROADV : is_roadl ? R_ROADL : (is_fpu0 || is_fpu1) ? R_FPU :
+				        is_comms ? R_COMMS : is_dsw2 ? R_DSW2 : is_analog ? R_ANALOG :
 				        is_unused_ff ? R_ALLF : is_sndcmd ? R_CMDRD : R_NONE;
-				if (is_rom && !m_we) begin d_req <= 1'b1; bst <= B_ROM; end
+				if (is_fpu0 || is_fpu1) begin fpu_req <= 1'b1; fpu_we <= m_we; bst <= B_FPU; end
+				else if (is_rom && !m_we) begin d_req <= 1'b1; bst <= B_ROM; end
 				else if (is_objram && m_we) bst <= wq_full ? B_OBJW : B_ACK;   // pushed now, or from B_OBJW
 				else if (is_objram) bst <= B_OBJR;
 				// A sound command holds the bus for SND_SPIN clocks before it is
@@ -418,6 +520,16 @@ module ms32_cpu_sys #(
 					R_PRI:   m_rdata <= {24'd0, priram_rdata};
 					R_PAL:   m_rdata <= {16'd0, palram_rdata};
 					R_ROZ:   m_rdata <= {16'd0, rozram_rdata};
+					R_ROADV: m_rdata <= {16'd0, roadvram_rdata};
+					R_ROADL: m_rdata <= {16'd0, roadline_rdata};
+					R_FPU:   m_rdata <= {16'd0, fpu_rdata};
+					R_COMMS: m_rdata <= comms_q;
+					R_DSW2:  m_rdata <= dsw2;
+					// analog_r(): AN2 twice in the top halves, then AN1 the steering,
+					// then AN0 the accelerator. AN2 is a bank of eight pulled-up
+					// switches; MAME names only bit 7, "Shift Brake", and reads them
+					// all off. The brake and the shifter are INPUTS bits 1 and 0.
+					R_ANALOG: m_rdata <= {analog_an2, analog_an2, analog_wheel, analog_accel};
 					R_LINE:  m_rdata <= {16'd0, lineram_rdata};
 					R_TX:    m_rdata <= {16'd0, txram_rdata};
 					R_BG:    m_rdata <= {16'd0, bgram_rdata};
@@ -439,6 +551,8 @@ module ms32_cpu_sys #(
 				bst     <= B_DRAIN;
 			end
 			B_OBJW: if (!wq_full) bst <= B_ACK;
+			// the FPU window answers in two clocks, read or write
+			B_FPU: if (fpu_valid) begin fpu_req <= 1'b0; bst <= B_ACK; end
 			B_OBJR: if (wq_empty) begin o_req <= 1'b1; bst <= B_OBJ; end
 			B_OBJ: if (o_ack) begin
 				o_req   <= 1'b0;
@@ -452,18 +566,6 @@ module ms32_cpu_sys #(
 		endcase
 	end
 
-	// ------------------------------------------------------------- DIP read check
-	always_ff @(posedge clk_cpu) begin
-		if (rst) begin
-			dbg_dsw_reads <= 16'd0; dbg_dsw_bad <= 16'd0; dbg_dsw_last_bad <= 32'd0;
-		end else if (c_req && c_ack && !c_we && c_addr == 32'hFCC0_0010 && c_size == 2'd2) begin
-			if (dbg_dsw_reads != 16'hFFFF) dbg_dsw_reads <= dbg_dsw_reads + 16'd1;
-			if (c_rdata != dsw_s2) begin
-				if (dbg_dsw_bad != 16'hFFFF) dbg_dsw_bad <= dbg_dsw_bad + 16'd1;
-				dbg_dsw_last_bad <= c_rdata;
-			end
-		end
-	end
 
 	// ------------------------------------------------------------- registers, interrupts
 	logic vbl_cpu, fld_cpu;
@@ -476,6 +578,7 @@ module ms32_cpu_sys #(
 		.wr(reg_wr), .wr_off(a[11:0]), .wr_data(m_wdata[15:0]),
 		.vblank_ev(vbl_cpu), .field_ev(fld_cpu),
 		.sound_irq_set(tomain_we), .sound_irq_clr(snd_irq_clr),
+		.fpu0_irq(fpu_irq0), .fpu1_irq(fpu_irq1),
 		.irq_n(irq_n), .irq_vector(irq_vector)
 	);
 

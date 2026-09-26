@@ -123,9 +123,11 @@ HAND_SETS = {
     ],
 }
 
-# Every set, from the driver (scripts/extract_romstart.py). f1superb is out of scope: 56.75 MB.
+# Every set, from the driver (scripts/extract_romstart.py). f1superb is 56.75 MB and
+# needs a module larger than 32 MB and its own build (ROADMAP, "F-1 Super Battle").
 _DRIVER = extract_romstart.load()
-SETS = {k: v for k, v in extract_romstart.sets_table(_DRIVER).items() if k != "f1superb"}
+SETS = extract_romstart.sets_table(_DRIVER)
+F1 = "f1superb"
 GAMES = extract_romstart.games(_DRIVER)
 CRCS = extract_romstart.crcs(_DRIVER)
 # MAME parents whose zip a clone's files may be merged into
@@ -134,6 +136,7 @@ PARENT = {k: g["parent"] for k, g in GAMES.items() if g["parent"] != "0"}
 INVERT_LINES = {k for k, g in GAMES.items() if g["machine"] == "ms32_invert_lines"}
 ROT270 = {k for k, g in GAMES.items() if g["rot"] == "ROT270"}
 SET_KEY = {k: g["init"].removeprefix("init_") for k, g in GAMES.items() if g["init"].startswith("init_ss")}
+SET_KEY[F1] = "ss92046_01"   # init_f1superb calls init_ss92046_01
 
 
 # jalcrpt.cpp, transcribed: dest[i] = src[L(i ^ addr_xor)] ^ (i & 0xff) ^ data_xor,

@@ -75,7 +75,17 @@ module ms32_sprite (
 	output logic        frame_done,      // one clk
 	output logic        frame_overrun,   // sticky: frame_start arrived while busy
 	output logic [23:0] frame_cycles,    // of the last completed frame
-	output logic [12:0] sprites_drawn    // of the last completed frame
+	output logic [12:0] sprites_drawn,   // of the last completed frame
+	// Of the last completed frame, how many drawn sprites carried each flip
+	// bit. The question they answer is which side of the bus is wrong when a
+	// sprite comes out mirrored: the game's own attribute, or this engine.
+	output logic [12:0] drawn_flipx,
+	output logic [12:0] drawn_flipy,
+	// The first drawn sprite of the frame carrying flipy, with the slot it came
+	// from: MAME never sets that bit in this game, so whatever is here says
+	// whether the record is a plausible sprite or corrupted object RAM.
+	output logic [15:0] first_fy_attr,
+	output logic [11:0] first_fy_idx
 );
 
 	typedef enum logic [3:0] {S_IDLE, S_READ, S_SETUP, S_MUL, S_CLIP, S_ROW, S_PIX, S_ROM, S_WR, S_NEXT} state_t;
@@ -85,7 +95,10 @@ module ms32_sprite (
 	logic [3:0]  rd_cnt;
 	logic [15:0] w [0:7];
 	logic [23:0] cyc;
-	logic [12:0] drawn;
+	logic [12:0] drawn, n_flipx, n_flipy;
+	logic [15:0] fy_attr;
+	logic [11:0] fy_idx;
+	logic        fy_seen;
 
 	// decoded record
 	wire        flipx   = w[0][0];
@@ -174,7 +187,8 @@ module ms32_sprite (
 				idx    <= reverse ? 12'd0 : 12'd4094;
 				rd_cnt <= 4'd0;
 				cyc    <= 24'd0;
-				drawn  <= 13'd0;
+				drawn  <= 13'd0; n_flipx <= 13'd0; n_flipy <= 13'd0;
+				fy_seen <= 1'b0; fy_attr <= 16'd0; fy_idx <= 12'd0;
 				fb_we  <= 1'b0;
 				rom_req_r <= 1'b0;
 				state  <= S_READ;
@@ -223,6 +237,15 @@ module ms32_sprite (
 						end else begin
 							cury  <= desty;
 							drawn <= drawn + 13'd1;
+							if (flipx) n_flipx <= n_flipx + 13'd1;
+							if (flipy) begin
+								n_flipy <= n_flipy + 13'd1;
+								if (!fy_seen) begin
+									fy_seen <= 1'b1;
+									fy_attr <= w[0];
+									fy_idx  <= idx;
+								end
+							end
 							state <= S_ROW;
 						end
 					end
@@ -297,6 +320,10 @@ module ms32_sprite (
 							if ((reverse && idx == 12'd4095) || (!reverse && idx == 12'd0)) begin
 								frame_cycles  <= cyc;
 								sprites_drawn <= drawn;
+								drawn_flipx   <= n_flipx;
+								drawn_flipy   <= n_flipy;
+								first_fy_attr <= fy_attr;
+								first_fy_idx  <= fy_idx;
 								frame_done    <= 1'b1;
 								state         <= S_IDLE;
 							end else begin

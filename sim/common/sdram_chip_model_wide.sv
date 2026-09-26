@@ -17,7 +17,11 @@
 // just this test's specific footprint. Otherwise byte-for-byte identical to
 // the original; see that file for the CAS-latency/burst-length protocol
 // modeling this preserves unchanged.
-module sdram_chip_model_wide (
+// MB: 32 is the MiSTer add-on board's MT48LC16M16 (9-bit column); 64 is the
+// larger part the F-1 Super Battle map needs (10-bit column, the controller's
+// byte address bit 25 on A9). A 32 MB image in a 64 MB model behaves the same,
+// since that bit is then always zero.
+module sdram_chip_model_wide #(parameter int unsigned MB = 32) (
 	input  logic         clk,
 
 	inout  wire  [15:0] SDRAM_DQ,
@@ -39,12 +43,18 @@ module sdram_chip_model_wide (
 
 	wire [2:0] cmd = {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE};
 
-	// Full real width: {bank[1:0], row[12:0], col[8:0]} = 24 bits = 16.7M
-	// words (32MB) -- matches the real MT48LC16M16 chip's actual capacity.
-	logic [15:0] mem [0:16777215];
+	// Full real width: {bank[1:0], row[12:0], col[COLW-1:0]} -- 24 bits = 16.7M
+	// words (32MB) on the MT48LC16M16, 25 bits = 33.5M words (64MB) on the
+	// larger part.
+	localparam int unsigned COLW = (MB == 64) ? 10 : 9;
+	logic [15:0] mem [0:(MB * 512 * 1024) - 1];
 
-	function automatic int unsigned addr_of(input logic [1:0] bank, input logic [12:0] row, input logic [8:0] col);
-		addr_of = {bank, row, col};
+	// The index is the LINEAR word address a[25:1], so a bench can peek by
+	// address: the controller splits it row=a[22:10], bank=a[24:23],
+	// col={a25, a[9:1]}, which puts byte address bit 25 on column bit 9.
+	function automatic int unsigned addr_of(input logic [1:0] bank, input logic [12:0] row, input logic [COLW-1:0] col);
+		addr_of = (COLW == 10) ? {col[COLW-1], bank, row, col[8:0]}
+		                       : {1'b0, bank, row, col[8:0]};
 	endfunction
 
 	logic [12:0] open_row [0:3];   // one per bank: SDRAM_BA is two bits (it was [0:1], which misread banks 2-3)
@@ -56,7 +66,7 @@ module sdram_chip_model_wide (
 	typedef enum logic [1:0] {R_IDLE, R_WAIT_CAS, R_DRIVE} rstate_t;
 	rstate_t rstate = R_IDLE;
 	int          rcount;
-	logic [8:0] rcol;
+	logic [COLW-1:0] rcol;
 	logic [1:0] rbank;
 	int          rburst_left;
 
@@ -74,14 +84,14 @@ module sdram_chip_model_wide (
 			CMD_ACTIVE:    open_row[SDRAM_BA] <= SDRAM_A;
 			CMD_LOAD_MODE: mode_reg <= SDRAM_A;
 			CMD_WRITE: begin
-				widx = addr_of(SDRAM_BA, open_row[SDRAM_BA], SDRAM_A[8:0]);
+				widx = addr_of(SDRAM_BA, open_row[SDRAM_BA], SDRAM_A[COLW-1:0]);
 				if (!SDRAM_A[11]) mem[widx][7:0]  <= SDRAM_DQ[7:0];
 				if (!SDRAM_A[12]) mem[widx][15:8] <= SDRAM_DQ[15:8];
 			end
 			CMD_READ: begin
 				rstate      <= R_WAIT_CAS;
 				rcount      <= int'(cas_latency_field) - 2;
-				rcol        <= SDRAM_A[8:0];
+				rcol        <= SDRAM_A[COLW-1:0];
 				rbank       <= SDRAM_BA;
 				rburst_left <= int'(burst_words);
 			end
@@ -97,7 +107,7 @@ module sdram_chip_model_wide (
 					widx        = addr_of(rbank, open_row[rbank], rcol);
 					drive_word  <= mem[widx];
 					rburst_left <= rburst_left - 1;
-					rcol        <= rcol + 9'd1;
+					rcol        <= rcol + 1'b1;
 				end else begin
 					rcount <= rcount - 1;
 				end
@@ -108,7 +118,7 @@ module sdram_chip_model_wide (
 					widx        = addr_of(rbank, open_row[rbank], rcol);
 					drive_word  <= mem[widx];
 					rburst_left <= rburst_left - 1;
-					rcol        <= rcol + 9'd1;
+					rcol        <= rcol + 1'b1;
 				end else begin
 					rstate <= R_IDLE;
 				end
@@ -116,11 +126,11 @@ module sdram_chip_model_wide (
 		endcase
 	end
 
-	function automatic void poke_word(input logic [1:0] bank, input logic [12:0] row, input logic [8:0] col, input logic [15:0] data);
+	function automatic void poke_word(input logic [1:0] bank, input logic [12:0] row, input logic [COLW-1:0] col, input logic [15:0] data);
 		mem[addr_of(bank, row, col)] = data;
 	endfunction
 
-	function automatic logic [15:0] peek_word(input logic [1:0] bank, input logic [12:0] row, input logic [8:0] col);
+	function automatic logic [15:0] peek_word(input logic [1:0] bank, input logic [12:0] row, input logic [COLW-1:0] col);
 		return mem[addr_of(bank, row, col)];
 	endfunction
 

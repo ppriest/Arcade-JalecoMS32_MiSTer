@@ -23,6 +23,9 @@ module ms32_rom_loader #(
 	input  logic         clk,
 	input  logic         reset,
 
+	// the image's length: LENGTH, or f1superb's longer 64 MB map (mod byte bit 6)
+	input  logic         bigmap,
+
 	input  logic         start,       // pulse
 	output logic         active,      // copying: hold the core, feed the download port
 
@@ -37,6 +40,8 @@ module ms32_rom_loader #(
 	output logic [7:0]   l_dout,
 	input  logic         l_wait       // ms32_sdram_top's ioctl_wait
 );
+
+	localparam logic [27:0] LENGTH_F1 = 28'h3AC_0000;   // f1superb's map ends after its 32 MB sprite region
 
 	typedef enum logic [2:0] {L_IDLE, L_RD, L_RDWAIT, L_BYTE, L_HOLD, L_WAIT} lst_t;
 	lst_t st;
@@ -67,7 +72,7 @@ module ms32_rom_loader #(
 				if (k != 3'd7) begin
 					k  <= k + 3'd1;
 					st <= L_BYTE;
-				end else if (base + 28'd8 >= LENGTH) begin
+				end else if (base + 28'd8 >= (bigmap ? LENGTH_F1 : LENGTH)) begin
 					st <= L_IDLE;
 				end else begin
 					base <= base + 28'd8;

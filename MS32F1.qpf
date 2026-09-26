@@ -1,0 +1,7 @@
+QUARTUS_VERSION = "17.0"
+
+# Two revisions from one source, as MS32.qpf has for the other 21 sets:
+# MS32F1_stp is the instrumented build (ISSP probes, OSD Debug page), MS32F1
+# the release. Both deploy as JalecoMS32F1.
+PROJECT_REVISION = "MS32F1_stp"
+PROJECT_REVISION = "MS32F1"

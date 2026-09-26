@@ -94,12 +94,25 @@ class Capture:
                 a = int(addr, 16)
                 if a in (0xFCE00280, 0xFCE00284):
                     self.brt[(a - 0xFCE00280) // 4] = int(data, 16)
+                # tilemaplayoutcontrol is write-only too, so a capture without
+                # --wlog reads it as 0: F-1 Super Battle sets it, and its BG is
+                # the 256x16 layout (the 64x64 one misses every pixel)
+                if a == 0xFCE00A7C:
+                    self.bgmode = int(data, 16)
         self.h, self.w = self.ref.shape[:2]
         roms = REPO / "roms" / game
         self.txtiles = np.fromfile(roms / "txtiles_dec.bin", dtype=np.uint8)
         self.bgtiles = np.fromfile(roms / "bgtiles_dec.bin", dtype=np.uint8)
         self.roztiles = np.fromfile(roms / "roztiles.bin", dtype=np.uint8)
         self.sprite = np.fromfile(roms / "sprite.bin", dtype=np.uint8)
+        # F-1 Super Battle: the road plane's map, line registers and control
+        # block, and its gfx5 textures (ROADMAP, "F-1 Super Battle")
+        self.f1 = (d / f"{game}_roadvram.bin").exists()
+        if self.f1:
+            self.roadvram = load_u16(d / f"{game}_roadvram.bin")
+            self.roadline = load_u16(d / f"{game}_roadline.bin")
+            self.road_ctrl = load_u32(d / f"{game}_roadctrl.bin")
+            self.gfx5 = np.fromfile(roms / "gfx5.bin", dtype=np.uint8)
 
     # ms32_v.cpp update_color(): word0 = RRRRRRRRGGGGGGGG, word1 low byte = B.
     # Brightness is applied only to colours with bit 14 CLEAR; the capture's
@@ -248,6 +261,31 @@ def render_sprites(c):
     return spridat, (bmp & 0xFF) != 0, pri
 
 
+def write_sprite_words(c):
+    """The sprite bitmap as the mixer sees it: {priority nibble, colour, pen}
+    per dot, 0 where nothing was drawn. sim/f1mix_tb drives the mixer with this,
+    so the bench needs no sprite engine."""
+    spr, op, pri = render_sprites(c)
+    word = np.where(op, ((pri >> 4) << 12) | (spr & 0x0FFF), 0).astype("<u2")
+    out = c.d / "model_sprite_words.u16"
+    with out.open("w") as f:
+        for v in word.reshape(-1):
+            f.write(f"{int(v):04x}\n")
+    return out
+
+
+def write_line_colours(c):
+    """The two line planes' per-line colour words, which the mixer's depth
+    bits come from."""
+    _, _, roz_line = render_roz_f1(c)
+    _, _, road_line = render_road(c)
+    out = c.d / "model_line_colours.txt"
+    with out.open("w") as f:
+        for y in range(c.h):
+            f.write(f"{int(roz_line[y]):04x} {int(road_line[y]):04x}\n")
+    return out
+
+
 def render_sprites_layer(c):
     idx, opaque, _ = render_sprites(c)
     print(f"  sprites drawn: {c.n_sprites_drawn}")
@@ -303,6 +341,103 @@ def render_roz(c):
     off = tileno * 256 + (py % 16) * 16 + (px % 16)
     pen = c.roztiles[off % len(c.roztiles)].astype(np.int64)
     return 0x2000 + colour * 256 + pen, pen != 0
+
+
+def render_lineplane(c, vram, lineram, ctrl, wrap, colour_base, colour_offset, tiles):
+    """ms32_v.cpp draw_line_plane(), the renderer F-1 Super Battle uses for both
+    the road plane and its ROZ layer. The map is 1 tile wide by 0x400 tall and a
+    tile is 2048x1 (f1layout), so a row of the map is one 2048-pixel strip of
+    texture: the ROZ accumulators pick the strip (py) and the pixel along it
+    (px). Per screen line, lineram gives start and increments as in ROZ super
+    mode, and vram[row*2] == 0 leaves the whole line transparent.
+
+    Returns (palette index, opaque, line colour), the last being vram[row*2+1]
+    per line -- bits 6-4 are the depth the priority RAM is indexed with."""
+    reg = lambda o: int(ctrl[o // 4])
+    startx = s18((reg(0x00) & 0xFFFF) | ((reg(0x04) & 3) << 16))
+    starty = s18((reg(0x08) & 0xFFFF) | ((reg(0x0c) & 3) << 16))
+    offsx = reg(0x30) + (reg(0x38) & 1) * 0x400
+    offsy = reg(0x34) + (reg(0x3c) & 1) * 0x400
+
+    ln = lineram.astype(np.int64)
+    row8 = 8 * (np.arange(c.h) & 0xFF)
+    st2x = np.array([s18((ln[i + 0] & 0xFFFF) | ((ln[i + 1] & 3) << 16)) for i in row8])[:, None]
+    st2y = np.array([s18((ln[i + 2] & 0xFFFF) | ((ln[i + 3] & 3) << 16)) for i in row8])[:, None]
+    lixx = np.array([s17((ln[i + 4] & 0xFFFF) | ((ln[i + 5] & 1) << 16)) for i in row8])[:, None]
+    lixy = np.array([s17((ln[i + 6] & 0xFFFF) | ((ln[i + 7] & 1) << 16)) for i in row8])[:, None]
+
+    xs = np.arange(c.w)[None, :].astype(np.int64)
+    cx = ((st2x + startx + offsx) << 16) + xs * (lixx << 8)
+    cy = ((st2y + starty + offsy) << 16) + xs * (lixy << 8)
+    px = (cx >> 16) & 2047
+    py = (cy >> 16) & 1023
+    inside = np.ones_like(px, bool)
+    if not wrap:            # draw_roz without wrap clips instead of repeating
+        inside = (((cx >> 16) >= 0) & ((cx >> 16) < 2048)
+                  & ((cy >> 16) >= 0) & ((cy >> 16) < 1024))
+
+    # the per-line row decides whether the line is drawn at all, and its colour
+    line_row = ((st2y[:, 0] + starty + offsy) & 0x3FF)
+    line_on = vram[2 * line_row] != 0
+    line_colour = np.where(line_on, vram[2 * line_row + 1], 0).astype(np.int64)
+
+    tileno = vram[2 * py].astype(np.int64)
+    colour = vram[2 * py + 1].astype(np.int64) & 0xF
+    off = tileno * 2048 + px
+    pen = tiles[off % len(tiles)].astype(np.int64)
+    idx = colour_base + (colour + colour_offset) * 256 + pen
+    opaque = (pen != 0) & inside & line_on[:, None]
+    return idx, opaque, line_colour
+
+
+def render_road(c):
+    # gfx5: palette base 0x0000, the tile info adds 0x50 to the colour
+    return render_lineplane(c, c.roadvram, c.roadline, c.road_ctrl, True, 0x0000, 0x50, c.gfx5)
+
+
+def render_roz_f1(c):
+    # roztiles through f1layout: palette base 0x2000, colour as it stands
+    return render_lineplane(c, c.rozram, c.lineram, c.roz_ctrl, False, 0x2000, 0, c.roztiles)
+
+
+def mix_f1(c):
+    """ms32_f1superbattle_state::mix_layers(): every pixel is a 13-bit index
+    into the priority RAM, whose byte says which layer shows and whether it is
+    dimmed. Transcribed from the PR, index bit for index bit."""
+    pal = c.palette()
+    pri8 = (np.fromfile(c.d / f"{c.game}_priram.bin", dtype="<u4") & 0xFF).astype(np.int64)
+
+    tx_idx, tx_op = render_tx(c)
+    bg_idx, bg_op = render_bg(c)
+    roz_idx, roz_op, roz_line = render_roz_f1(c)
+    road_idx, road_op, road_line = render_road(c)
+    spr, spr_op, spr_pri = render_sprites(c)
+
+    road_depth = ((road_line >> 4) & 7)[:, None]
+    roz_depth = ((roz_line >> 4) & 7)[:, None]
+    depth = np.where(roz_op, roz_depth, road_depth)
+
+    # render_sprites gives the attribute's priority nibble already shifted into
+    # bits 7-4; the index takes the nibble itself, in bits 6-3
+    pri = np.where(spr_op, spr_pri >> 4, 0)
+    idx = ((~spr_op & 1) << 12) | ((~tx_op & 1) << 11) | (1 << 10) | ((~roz_op & 1) << 9) \
+        | ((~road_op & 1) << 8) | ((~bg_op & 1) << 7) | (pri << 3) | depth
+    code = pri8[idx]
+
+    sel = (code >> 3) & 7
+    pen = np.zeros((c.h, c.w), np.int64)
+    pen = np.where(sel == 0, spr & 0x0FFF, pen)
+    pen = np.where(sel == 1, bg_idx, pen)
+    pen = np.where(sel == 2, roz_idx, pen)
+    pen = np.where(sel == 4, road_idx, pen)
+    pen = np.where(sel == 6, tx_idx, pen)
+    pen = np.where(np.isin(sel, [0, 1, 2, 4, 6]), pen, 0)
+    pen = np.where((code >> 6) & 1, 0, pen)        # backdrop
+
+    rgb = pal[pen & 0x7FFF].astype(np.int64)
+    dim = ((code >> 2) & 1) == 0                   # TODO in the PR too: half brightness
+    rgb = np.where(dim[:, :, None], rgb >> 1, rgb)
+    return rgb.astype(np.uint8)
 
 
 def mix(c):
@@ -373,7 +508,18 @@ def render_mixed_layer(c):
     return rgb, np.ones((c.h, c.w), bool)
 
 
-LAYERS = {"tx": render_tx, "bg": render_bg, "roz": render_roz, "sprites": render_sprites_layer}
+def render_road_layer(c):
+    idx, op, _ = render_road(c)
+    return idx, op
+
+
+def render_rozf1_layer(c):
+    idx, op, _ = render_roz_f1(c)
+    return idx, op
+
+
+LAYERS = {"tx": render_tx, "bg": render_bg, "roz": render_roz, "sprites": render_sprites_layer,
+          "road": render_road_layer, "rozf1": render_rozf1_layer}
 
 
 def main():
@@ -387,7 +533,11 @@ def main():
     pal = c.palette()
 
     if a.layer == "all":
-        rgb = mix(c)
+        if c.f1:
+            print("  " + str(write_sprite_words(c)))
+            print("  " + str(write_line_colours(c)))
+        rgb = mix_f1(c) if c.f1 else mix(c)
+        c.layer_order = getattr(c, "layer_order", {"road": 0, "bg": 1, "roz": 2, "tx": 3})
         opaque = np.ones((c.h, c.w), bool)
         print(f"  layer order (bottom first): " + ", ".join(k for k, v in sorted(c.layer_order.items(), key=lambda kv: kv[1])))
     else:

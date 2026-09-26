@@ -2,7 +2,14 @@
 //
 // The MS32 video path: CRTC, TX/BG/ROZ line engines, object RAM with its
 // vblank copy, the zoom sprite engine and its DDR3 frame buffer, and the
-// mixer with palette and brightness. Every video RAM lives here with a
+// mixer with palette and brightness.
+//
+// F1SUPERB builds F-1 Super Battle instead (ROADMAP, "F-1 Super Battle"):
+// its ROZ layer is a line plane rather than a rotating tilemap, it has a
+// second line plane for the road with its own map, line RAM and gfx5
+// textures, and its mixer reads the priority RAM per dot. The CRTC, TX, BG,
+// sprites and palette are the same. The extra ports exist in both builds;
+// ms32_core ties them off where they mean nothing. Every video RAM lives here with a
 // CPU-side write port; the tile and sprite ROMs are req/valid ports the
 // SDRAM backend serves; the frame buffer's DDRAM port goes straight to the
 // top level.
@@ -16,6 +23,7 @@
 // halfword the CPU wrote (every register here is 16-bit behind umask32):
 //   0x000-0x011  sysctrl CRTC (ms32_crtc)         0x200-0x27F  sprite control
 //   0x280/0x284  brightness                       0x600-0x65F  ROZ control
+//   0x800-0x85F  road plane control (F1SUPERB)
 //   0xA00-0xA17  TX scroll   0xA20-0xA37 BG scroll   0xA7C bgmode
 //
 // Dot timing: ce_pix marks the end of dot (hcnt, vcnt); r/g/b, blanking
@@ -38,6 +46,10 @@ module ms32_video (
 	input  logic [12:0] bgram_addr,   input logic bgram_wel,   input logic bgram_weh,   output logic [15:0] bgram_rdata,
 	input  logic [14:0] rozram_addr,  input logic rozram_wel,  input logic rozram_weh,  output logic [15:0] rozram_rdata,
 	input  logic [10:0] lineram_addr, input logic lineram_wel, input logic lineram_weh, output logic [15:0] lineram_rdata,
+	// F1SUPERB: the road plane's map and line RAM, sized to what the game uses
+	// (448 and 2,048 words measured over three minutes of play, ROADMAP)
+	input  logic [9:0]  roadvram_addr, input logic roadvram_wel, input logic roadvram_weh, output logic [15:0] roadvram_rdata,
+	input  logic [10:0] roadline_addr, input logic roadline_wel, input logic roadline_weh, output logic [15:0] roadline_rdata,
 	// object RAM: CPU requests on clk (ms32_cpu_sys's crossing), the RAM in SDRAM
 	input  logic        obj_wq_valid, input logic [32:0] obj_wq_data, output logic obj_wq_pop, input logic [5:0] obj_wq_level,
 	input  logic        obj_cpu_req,  input logic [14:0] obj_cpu_addr, output logic obj_cpu_valid, output logic [15:0] obj_cpu_rdata,
@@ -51,6 +63,7 @@ module ms32_video (
 	output logic        tx_rom_req,  output logic [23:0] tx_rom_addr,  input logic tx_rom_valid,  input logic [63:0] tx_rom_data,
 	output logic        bg_rom_req,  output logic [23:0] bg_rom_addr,  input logic bg_rom_valid,  input logic [63:0] bg_rom_data,
 	output logic        roz_rom_req, output logic [23:0] roz_rom_addr, input logic roz_rom_valid, input logic [63:0] roz_rom_data,
+	output logic        gfx5_rom_req, output logic [23:0] gfx5_rom_addr, input logic gfx5_rom_valid, input logic [63:0] gfx5_rom_data,
 	output logic        spr_rom_req, output logic [27:0] spr_rom_addr, input logic spr_rom_valid, input logic [63:0] spr_rom_data,
 
 	// sprite frame buffer
@@ -79,18 +92,39 @@ module ms32_video (
 
 	// debug
 	output logic        tx_overrun, bg_overrun, roz_overrun, spr_overrun, fb_overrun, bad_primask,
+	output logic        road_overrun,                            // F1SUPERB: the road line plane
+	output logic [15:0] dbg_road_lines,                          // road lines drawn in the last frame
+	output logic [15:0] dbg_road_pens,                           // non-zero road pens in the last frame
+	output logic [12:0] dbg_spr_flipx, dbg_spr_flipy,            // flipped sprites in the last frame
+	output logic [15:0] dbg_fy_attr,                             // the first flipy sprite's attribute
+	output logic [11:0] dbg_fy_idx,                              // and the slot it came from
+	output logic [9:0]  dbg_road_row,                            // the row the road plane last selected
+	output logic [15:0] dbg_road_rowword,                        // and what vram[2 row] gave back
+	output logic [15:0] dbg_road_starty,                         // road_ctrl[2], as the CPU last set it
+	output logic [15:0] dbg_road_offsy,                          // road_ctrl[13]
+	// A window on the video RAMs, for dumping them off a running board and
+	// rendering the result with scripts/render_model.py -- the same renderer
+	// that matches MAME pixel for pixel, so it says whether the RAM is right
+	// and the RTL wrong, or the RAM is wrong. While dbg_mem_en is held the
+	// read ports are taken over and the picture is garbage; the game is meant
+	// to be paused for it.
+	input  logic        dbg_mem_en,
+	input  logic [2:0]  dbg_mem_reg,
+	input  logic [15:0] dbg_mem_addr,
+	output logic [15:0] dbg_mem_data,
 	output logic [23:0] spr_frame_cycles,
 	output logic [12:0] spr_drawn,
 	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz,
 	// one clk each, for the ISSP probe: a sprite frame still drawing when the next
 	// copy is done, a sprite frame-buffer line read late, a ROZ line late, the copy done
-	output logic        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_copy_done
+	output logic        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_road_ovr_ev, dbg_copy_done
 );
 
 	// ------------------------------------------------------------ registers
 	logic [15:0] tx_scroll [0:5];
 	logic [15:0] bg_scroll [0:5];
 	logic [15:0] roz_ctrl  [0:23];
+	logic [15:0] road_ctrl [0:23];   // F1SUPERB, 0xFCE00800
 	logic [15:0] spr_ctrl10;
 	logic [15:0] brt0, brt1;
 	logic        bgmode;
@@ -106,6 +140,7 @@ module ms32_video (
 			if (vreg_off[11:5] == 7'b1010_001 && vreg_off[4:2] < 3'd6) bg_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA20-0xA37
 			if (vreg_off == 12'hA7C) bgmode <= vreg_data[0];
 			if (vreg_off[11:7] == 5'b01100 && vreg_off[6:2] < 5'd24) roz_ctrl[vreg_off[6:2]] <= vreg_data;   // 0x600-0x65F
+			if (vreg_off[11:7] == 5'b10000 && vreg_off[6:2] < 5'd24) road_ctrl[vreg_off[6:2]] <= vreg_data;  // 0x800-0x85F
 			if (vreg_off == 12'h210) spr_ctrl10 <= vreg_data;
 			if (vreg_off == 12'h280) brt0 <= vreg_data;
 			if (vreg_off == 12'h284) brt1 <= vreg_data;
@@ -137,13 +172,68 @@ module ms32_video (
 	logic [10:0] roz_la;
 	logic [15:0] tx_vd, bg_vd, roz_vd, roz_ld;
 	dpram_dc #(.ADDR_WIDTH(13)) u_txram (.clk_a(cpu_clk), .a_addr(txram_addr), .a_wel(txram_wel), .a_weh(txram_weh), .a_wdata(cpu_wdata), .a_rdata(txram_rdata),
-		.clk_b(clk), .b_addr(tx_va), .b_re(1'b1), .b_rdata(tx_vd));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[12:0] : tx_va), .b_re(1'b1), .b_rdata(tx_vd));
 	dpram_dc #(.ADDR_WIDTH(13)) u_bgram (.clk_a(cpu_clk), .a_addr(bgram_addr), .a_wel(bgram_wel), .a_weh(bgram_weh), .a_wdata(cpu_wdata), .a_rdata(bgram_rdata),
-		.clk_b(clk), .b_addr(bg_va), .b_re(1'b1), .b_rdata(bg_vd));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[12:0] : bg_va), .b_re(1'b1), .b_rdata(bg_vd));
 	dpram_dc #(.ADDR_WIDTH(15)) u_rozram (.clk_a(cpu_clk), .a_addr(rozram_addr), .a_wel(rozram_wel), .a_weh(rozram_weh), .a_wdata(cpu_wdata), .a_rdata(rozram_rdata),
-		.clk_b(clk), .b_addr(roz_va), .b_re(1'b1), .b_rdata(roz_vd));
+		.clk_b(clk), .b_addr(dbg_mem_en ? {dbg_mem_addr[14:0]} : roz_va), .b_re(1'b1), .b_rdata(roz_vd));
+	// How many of a frame's lines the road plane actually draws: vram[2 row]
+	// zero leaves a line transparent, so an all-blank road reads as 0 here and
+	// says the fault is upstream of the plane, not in it.
+	assign dbg_road_starty = road_ctrl[2];
+	assign dbg_road_offsy  = road_ctrl[13];
+
+	// 0 road map, 1 road line RAM, 2 road_ctrl, 3 priority RAM, 4 ROZ map,
+	// 5 ROZ line RAM, 6 TX map, 7 palette (even words in the low half of the
+	// pair, odd in the high -- both halves come back at once).
+	always_ff @(posedge clk) begin
+		case (dbg_mem_reg)
+			3'd0: dbg_mem_data <= road_vd;
+			3'd1: dbg_mem_data <= road_ld;
+			3'd2: dbg_mem_data <= road_ctrl[dbg_mem_addr[4:0] < 5'd24 ? dbg_mem_addr[4:0] : 5'd0];
+			3'd3: dbg_mem_data <= {8'd0, pri_data};
+			3'd4: dbg_mem_data <= roz_vd;
+			3'd5: dbg_mem_data <= roz_ld;
+			3'd6: dbg_mem_data <= tx_vd;
+			3'd7: dbg_mem_data <= dbg_mem_addr[15] ? pal_w1 : pal_w0;
+		endcase
+	end
+
+	logic road_line_drawn, road_pen_nz;
+	logic [15:0] road_lines_n, road_pens_n;
+	always_ff @(posedge clk) begin
+		if (line_start && vcnt_next2 == 12'd0) begin
+			dbg_road_lines <= road_lines_n;
+			dbg_road_pens  <= road_pens_n;
+			road_lines_n   <= 16'd0;
+			road_pens_n    <= 16'd0;
+		end else begin
+			if (road_line_drawn && road_lines_n != 16'hFFFF) road_lines_n <= road_lines_n + 16'd1;
+			if (road_pen_nz    && road_pens_n  != 16'hFFFF) road_pens_n  <= road_pens_n  + 16'd1;
+		end
+	end
+
+	// Declared here rather than beside the line planes below: the road RAMs
+	// are instantiated first, and vlog rejects a net used before its
+	// declaration even where Quartus and verilator infer it.
+	logic [10:0] road_va, road_la, rozf1_va;
+	logic [15:0] road_vd, road_ld;
+`ifdef F1SUPERB
+	// The game writes 448 words of the map and 2,048 of the line RAM, where
+	// MAME declares 32,768 of each; the decode wraps rather than the address
+	// widening, and ms32_core counts a write that reaches past the end.
+	dpram_dc #(.ADDR_WIDTH(10)) u_roadvram (.clk_a(cpu_clk), .a_addr(roadvram_addr), .a_wel(roadvram_wel), .a_weh(roadvram_weh), .a_wdata(cpu_wdata), .a_rdata(roadvram_rdata),
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[9:0] : road_va[9:0]), .b_re(1'b1), .b_rdata(road_vd));
+	dpram_dc #(.ADDR_WIDTH(11)) u_roadline (.clk_a(cpu_clk), .a_addr(roadline_addr), .a_wel(roadline_wel), .a_weh(roadline_weh), .a_wdata(cpu_wdata), .a_rdata(roadline_rdata),
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[10:0] : road_la), .b_re(1'b1), .b_rdata(road_ld));
+`else
+	assign roadvram_rdata = 16'd0;
+	assign roadline_rdata = 16'd0;
+	assign road_vd = 16'd0;
+	assign road_ld = 16'd0;
+`endif
 	dpram_dc #(.ADDR_WIDTH(11)) u_lineram (.clk_a(cpu_clk), .a_addr(lineram_addr), .a_wel(lineram_wel), .a_weh(lineram_weh), .a_wdata(cpu_wdata), .a_rdata(lineram_rdata),
-		.clk_b(clk), .b_addr(roz_la), .b_re(1'b1), .b_rdata(roz_ld));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[10:0] : roz_la), .b_re(1'b1), .b_rdata(roz_ld));
 
 	// ---------------------------------------------------------- tile engines
 	logic [7:0] tx_pen, bg_pen, roz_pen;
@@ -166,6 +256,55 @@ module ms32_video (
 		.rom_req(bg_rom_req), .rom_addr(bg_rom_addr), .rom_valid(bg_rom_valid), .rom_data(bg_rom_data),
 		.pen(bg_pen), .colour(bg_col), .opaque(bg_op), .fetch_overrun(bg_overrun), .overrun_ev()
 	);
+	// F-1 Super Battle draws both of its rotating planes as line planes; every
+	// other set has the rotating tilemap. The ROZ ROM port serves whichever
+	// reads roztiles, and gfx5 is the road's alone.
+	logic [7:0]  road_pen;
+	logic [3:0]  road_col;
+	logic        road_op;
+	logic [15:0] roz_line_colour, road_line_colour;
+
+`ifdef F1SUPERB
+	ms32_lineplane #(.WRAP(1'b0)) u_rozplane (      // roztiles, clipped
+		.clk(clk), .reset(reset),
+		.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
+		.startx({roz_ctrl[1][1:0], roz_ctrl[0]}), .starty({roz_ctrl[3][1:0], roz_ctrl[2]}),
+		.offsx(roz_ctrl[12]), .offsy(roz_ctrl[13]), .offsx_hi(roz_ctrl[14][0]), .offsy_hi(roz_ctrl[15][0]),
+		.line_addr(roz_la), .line_data(roz_ld),
+		.vram_addr(rozf1_va), .vram_data(roz_vd),
+		.rom_req(roz_rom_req), .rom_addr(roz_rom_addr), .rom_valid(roz_rom_valid), .rom_data(roz_rom_data),
+		.pen(roz_pen), .colour(roz_col), .opaque(roz_op), .line_colour(roz_line_colour),
+		.fetch_overrun(roz_overrun), .overrun_ev(dbg_roz_ovr_ev),
+		.line_done(), .line_cycles(), .line_misses(), .line_drawn(), .pen_nz(), .dbg_row(), .dbg_rowword()
+	);
+	assign roz_va = {4'd0, rozf1_va};   // the line plane's map is 1,024 rows
+	ms32_lineplane #(.WRAP(1'b1)) u_roadplane (     // gfx5, wrapped
+		.clk(clk), .reset(reset),
+		.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
+		.startx({road_ctrl[1][1:0], road_ctrl[0]}), .starty({road_ctrl[3][1:0], road_ctrl[2]}),
+		// dbg: what the CPU side last delivered for the two registers the row
+		// comes from. The register path is a CDC mailbox with no back-pressure.
+		.offsx(road_ctrl[12]), .offsy(road_ctrl[13]), .offsx_hi(road_ctrl[14][0]), .offsy_hi(road_ctrl[15][0]),
+		.line_addr(road_la), .line_data(road_ld),
+		.vram_addr(road_va), .vram_data(road_vd),
+		.rom_req(gfx5_rom_req), .rom_addr(gfx5_rom_addr), .rom_valid(gfx5_rom_valid), .rom_data(gfx5_rom_data),
+		.pen(road_pen), .colour(road_col), .opaque(road_op), .line_colour(road_line_colour),
+		.fetch_overrun(road_overrun), .overrun_ev(dbg_road_ovr_ev), .line_done(), .line_cycles(), .line_misses(),
+		.line_drawn(road_line_drawn), .pen_nz(road_pen_nz),
+		.dbg_row(dbg_road_row), .dbg_rowword(dbg_road_rowword)
+	);
+`else
+	assign road_overrun = 1'b0;
+	assign dbg_road_ovr_ev = 1'b0;
+	assign road_pen = 8'd0;
+	assign road_col = 4'd0;
+	assign road_op  = 1'b0;
+	assign roz_line_colour = 16'd0;
+	assign road_line_colour = 16'd0;
+	assign road_va = 11'd0;
+	assign road_la = 11'd0;
+	assign gfx5_rom_req = 1'b0;
+	assign gfx5_rom_addr = 24'd0;
 	ms32_roz u_roz (
 		.clk(clk), .reset(reset),
 		.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
@@ -181,6 +320,7 @@ module ms32_video (
 		.line_done(), .line_cycles(), .line_misses(),
 		.dbg_fill(dbg_roz_fill), .dbg_hit(dbg_roz_hit), .dbg_pen_nz(dbg_roz_pen_nz)
 	);
+`endif
 
 	// --------------------------------------------------------------- sprites
 	logic        copy_done, obj_ready, obj_rd, spr_busy;
@@ -212,7 +352,9 @@ module ms32_video (
 		.obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready), .obj_rd(obj_rd),
 		.rom_req(spr_rom_req), .rom_addr(spr_rom_addr), .rom_valid(spr_rom_valid), .rom_data(spr_rom_data),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready),
-		.busy(spr_busy), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn)
+		.busy(spr_busy), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn),
+		.drawn_flipx(dbg_spr_flipx), .drawn_flipy(dbg_spr_flipy),
+		.first_fy_attr(dbg_fy_attr), .first_fy_idx(dbg_fy_idx)
 	);
 	ms32_sprite_fb u_fb (
 		.clk(clk), .reset(reset),
@@ -232,16 +374,33 @@ module ms32_video (
 	logic [15:0] pal_r0, pal_r1;
 	logic        pal_odd_q;
 	dpram_dc #(.ADDR_WIDTH(15)) u_pal0 (.clk_a(cpu_clk), .a_addr(palram_addr[15:1]), .a_wel(palram_wel && !palram_addr[0]), .a_weh(palram_weh && !palram_addr[0]), .a_wdata(cpu_wdata), .a_rdata(pal_r0),
-		.clk_b(clk), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w0));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[14:0] : pal_addr), .b_re(1'b1), .b_rdata(pal_w0));
 	dpram_dc #(.ADDR_WIDTH(15)) u_pal1 (.clk_a(cpu_clk), .a_addr(palram_addr[15:1]), .a_wel(palram_wel &&  palram_addr[0]), .a_weh(palram_weh &&  palram_addr[0]), .a_wdata(cpu_wdata), .a_rdata(pal_r1),
-		.clk_b(clk), .b_addr(pal_addr), .b_re(1'b1), .b_rdata(pal_w1));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[14:0] : pal_addr), .b_re(1'b1), .b_rdata(pal_w1));
 	always_ff @(posedge cpu_clk) pal_odd_q <= palram_addr[0];
 	assign palram_rdata = pal_odd_q ? pal_r1 : pal_r0;
 	logic [12:0] pri_addr;
 	logic [7:0]  pri_data;
 	dpram_dc #(.ADDR_WIDTH(13), .DATA_WIDTH(8)) u_priram (.clk_a(cpu_clk), .a_addr(priram_addr), .a_wel(priram_we), .a_weh(1'b0), .a_wdata(cpu_wdata[7:0]), .a_rdata(priram_rdata),
-		.clk_b(clk), .b_addr(pri_addr), .b_re(1'b1), .b_rdata(pri_data));
+		.clk_b(clk), .b_addr(dbg_mem_en ? dbg_mem_addr[12:0] : pri_addr), .b_re(1'b1), .b_rdata(pri_data));
 
+`ifdef F1SUPERB
+	assign bad_primask = 1'b0;      // F-1 Super Battle's mixer has no unhandled case
+	ms32_mixer_f1 u_mix (
+		.clk(clk), .reset(reset),
+		.tx_pen(tx_pen), .tx_col(tx_col), .tx_op(tx_op),
+		.bg_pen(bg_pen), .bg_col(bg_col), .bg_op(bg_op),
+		.roz_pen(roz_pen), .roz_col(roz_col), .roz_op(roz_op),
+		.road_pen(road_pen), .road_col(road_col), .road_op(road_op),
+		.roz_line(roz_line_colour), .road_line(road_line_colour),
+		.spr(spr_pix),
+		.pri_addr(pri_addr), .pri_data(pri_data),
+		.pal_addr(pal_addr), .pal_w0(pal_w0), .pal_w1(pal_w1),
+		.brt0(brt0), .brt1(brt1),
+		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr), .dis_road(1'b0),
+		.r(r), .g(g), .b(b)
+	);
+`else
 	ms32_mixer u_mix (
 		.clk(clk), .reset(reset), .frame_start(vblank_ev),
 		.tx_pen(tx_pen), .tx_col(tx_col), .tx_op(tx_op),
@@ -254,5 +413,6 @@ module ms32_video (
 		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr),
 		.r(r), .g(g), .b(b), .unhandled_primask(bad_primask)
 	);
+`endif
 
 endmodule

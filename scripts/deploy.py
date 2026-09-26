@@ -214,7 +214,11 @@ def check_build(rbf, log, sta, allow_timing_miss=False):
 # from before this convention is moved aside to .held rather than left to
 # compete with the numbered ones.
 # ---------------------------------------------------------------------------
+# f1superb has its own Quartus revision and its own core file: the .mra says
+# <rbf>JalecoMS32F1</rbf>, so it numbers separately and neither stem's regex
+# matches the other's files.
 RBF_STEM = "JalecoMS32"
+RBF_STEM_BY_REV = {"MS32F1": "JalecoMS32F1", "MS32F1_stp": "JalecoMS32F1"}
 RBF_FIRST = 10000001
 
 
@@ -234,9 +238,13 @@ def next_rbf_name(m):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rbf", default=str(REPO / "build" / "output_files" / "MS32_stp.rbf"))
-    ap.add_argument("--log", default=str(REPO / "build" / "q_staged.log"))
-    ap.add_argument("--sta", default=str(REPO / "build" / "output_files" / "MS32_stp.sta.summary"))
+    ap.add_argument("--rev", default="MS32_stp",
+                    help="Quartus revision to deploy: MS32_stp (default), "
+                         "MS32, MS32F1 or MS32F1_stp. Sets --rbf, --log and "
+                         "--sta, and the remote core name's stem")
+    ap.add_argument("--rbf", default=None)
+    ap.add_argument("--log", default=None)
+    ap.add_argument("--sta", default=None)
     ap.add_argument("--name", default=None,
                     help="remote core filename. Default: the next numbered "
                          "JalecoMS32_NNNNNNNN.rbf on the device (see "
@@ -256,6 +264,15 @@ def main():
     ap.add_argument("--force", action="store_true",
                     help="deploy despite failed build checks -- say why")
     a = ap.parse_args()
+
+    global RBF_STEM
+    RBF_STEM = RBF_STEM_BY_REV.get(a.rev, RBF_STEM)
+    out = REPO / "build" / "output_files"
+    a.rbf = a.rbf or str(out / f"{a.rev}.rbf")
+    # build_staged.py always writes Quartus's own log to build/q_staged.log,
+    # whichever revision it built, so the staleness check reads that one.
+    a.log = a.log or str(REPO / "build" / "q_staged.log")
+    a.sta = a.sta or str(out / f"{a.rev}.sta.summary")
 
     env = load_env(REPO / "mister.env")
     m = Mister(env, a.dry_run)

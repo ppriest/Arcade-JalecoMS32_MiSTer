@@ -385,6 +385,11 @@ clock (a clipped sprite's source offset, say), a serial shift-add stepper over a
 form. Where one must stay at pixel rate (palette brightness), keep it to a DSP-sized width and say
 so in a comment. Before committing RTL, grep it for `*` and `/` outside comments.
 
+The one exception, granted by the project owner for F-1 Super Battle: the Jaleco FPU
+(`rtl/cpu/jalfpu/`) is itself a maths unit, where a 16x16 multiply and a 32/16 divide are single
+instructions of its instruction set. That core may use both. The exception covers the chip's own
+arithmetic and nothing else around it.
+
 ## 14. Licence headers
 
 This core is **GPL-3.0-or-later**, forced by the vendored V60/V70 CPU. Full reasoning and the

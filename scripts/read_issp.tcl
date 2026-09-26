@@ -40,12 +40,53 @@ if {[lindex $argv 0] eq "clear"} {
     }
     puts "counters cleared"
 }
+# "poll <n>" samples instance V <n> times in this one JTAG session and prints a
+# compact line each time. Starting quartus_stp costs about fifteen seconds, so a
+# time series is only affordable from inside a single session -- which is what it
+# takes to catch a moment in an attract loop.
+set npoll 0
+set pi [lsearch -exact $argv poll]
+if {$pi >= 0} { set npoll [lindex $argv [expr {$pi + 1}]] }
+if {$npoll > 0} {
+    foreach inst $insts {
+        set ii [lindex $inst 0]
+        if {[lindex $inst 3] ne "V"} { continue }
+        set p [read_probe_data -instance_index $ii]
+        if {[string length $p] != 441} {
+            puts "WIDTH MISMATCH: instance V is [string length $p] bits, this tree'srtl/debug expects 441. Refusing to poll -- the board is running a different build."
+            end_insystem_source_probe
+            exit 1
+        }
+        puts "sample frames roadlines roadpens sprdrawn flipx flipy fyattr fyslot row rowword starty offsy"
+        for {set k 0} {$k < $npoll} {incr k} {
+            set p [read_probe_data -instance_index $ii]
+            puts [format "%d %d %d %d %d %d %d %04X %d %d %04X %04X %04X" $k                 [bits_to_int $p 103 118] [bits_to_int $p 284 299] [bits_to_int $p 300 315]                 [bits_to_int $p 342 354] [bits_to_int $p 316 328] [bits_to_int $p 329 341]                 [bits_to_int $p 355 370] [bits_to_int $p 371 382]                 [bits_to_int $p 383 392] [bits_to_int $p 393 408]                 [bits_to_int $p 409 424] [bits_to_int $p 425 440]]
+            after 700
+        }
+    }
+    end_insystem_source_probe
+    exit 0
+}
+
 foreach inst $insts {
     set ii [lindex $inst 0]
     set iid [lindex $inst 3]
     set p [read_probe_data -instance_index $ii]
     puts ""
     puts "---- instance $ii ($iid) ----"
+    # "raw" prints the bit string as well as the decode: the field offsets below
+    # belong to the RTL in this working tree, so a board running an older
+    # bitstream has to be decoded by hand against that build's own header.
+    if {[lsearch -exact $argv raw] >= 0} { puts "raw ([string length $p] bits): $p" }
+    # The field offsets below belong to the RTL in this working tree. A board
+    # running an older bitstream decodes into plausible nonsense unless the
+    # width is checked -- that has already happened once here.
+    set want 0
+    if {$iid eq "M"} { set want 132 } elseif {$iid eq "V"} { set want 441 }
+    if {$want && [string length $p] != $want} {
+        puts "WIDTH MISMATCH: instance $iid is [string length $p] bits, this tree'srtl/debug expects $want. The board is running a different build; the numbersbelow would be nonsense, so they are not printed. Deploy this tree's bitstream,or read it with \"raw\" and decode against that build's own header."
+        continue
+    }
     if {$iid eq "M"} {
         puts [format "download bytes accepted   : %d" [bits_to_int $p 0 15]]
         puts [format "download writes issued    : %d" [bits_to_int $p 16 31]]
@@ -74,16 +115,22 @@ foreach inst $insts {
         puts [format "latest copy finish        : %d clocks after vblank (%d lines)" $mc [expr {$mc / 6144}]]
         puts [format "frames                    : %d" [bits_to_int $p 103 118]]
         puts [format "frame of last late ROZ    : %d" [bits_to_int $p 119 134]]
-        puts [format "core resets seen          : %d" [bits_to_int $p 135 150]]
-        puts [format "last reset length         : %d clocks" [bits_to_int $p 151 174]]
-        puts [format "OSD reset rises           : %d" [bits_to_int $p 175 190]]
-        puts [format "V70 held (core_run falls) : %d" [bits_to_int $p 191 206]]
-        puts [format "DIP reads (32-bit)        : %d" [bits_to_int $p 207 222]]
-        puts [format "DIP reads not the switches: %d" [bits_to_int $p 223 238]]
-        puts [format "last such value           : %08X" [bits_to_int $p 239 270]]
-        puts [format "YMF271 passes overrun     : %d" [bits_to_int $p 271 286]]
-        puts [format "YMF271 fetch wait, max    : %d clocks" [bits_to_int $p 287 302]]
-        puts [format "V70 ifetch wait, max      : %d clocks" [bits_to_int $p 303 318]]
+        puts [format "YMF271 passes overrun     : %d" [bits_to_int $p 135 150]]
+        puts [format "YMF271 fetch wait, max    : %d clocks" [bits_to_int $p 151 166]]
+        puts [format "V70 ifetch wait, max      : %d clocks" [bits_to_int $p 167 182]]
+        puts [format "road writes past the RAMs : %d" [bits_to_int $p 183 198]]
+        puts [format "road plane overrun        : %s" [expr {[string index $p [expr {[string length $p] - 1 - 199}]] eq "1" ? "yes" : "no"}]]
+        puts [format "road lines late           : %d" [bits_to_int $p 200 215]]
+        puts [format "longest FPU routine       : %d clocks (%.1f%% of a frame)" [bits_to_int $p 216 235] [expr {100.0 * [bits_to_int $p 216 235] / 333333}]]
+        puts [format "FPU routines started      : %d" [bits_to_int $p 236 251]]
+        puts [format "road map writes           : %d" [bits_to_int $p 252 267]]
+        puts [format "road line RAM writes      : %d" [bits_to_int $p 268 283]]
+        puts [format "road lines drawn, last fr : %d" [bits_to_int $p 284 299]]
+        puts [format "road pens non-zero, last  : %d" [bits_to_int $p 300 315]]
+        puts [format "sprites drawn / fx / fy   : %d / %d / %d" [bits_to_int $p 342 354] [bits_to_int $p 316 328] [bits_to_int $p 329 341]]
+        puts [format "first flipy sprite        : attr %04X at slot %d" [bits_to_int $p 355 370] [bits_to_int $p 371 382]]
+        puts [format "road row / vram\[2 row\]    : %d / %04X" [bits_to_int $p 383 392] [bits_to_int $p 393 408]]
+        puts [format "road starty / offsy       : %04X / %04X" [bits_to_int $p 409 424] [bits_to_int $p 425 440]]
     } else {
         puts "raw: $p"
     }

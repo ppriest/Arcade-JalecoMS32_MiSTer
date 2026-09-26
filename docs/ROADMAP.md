@@ -146,9 +146,8 @@ That table is the first scope decision and it is arithmetic, not preference:
 - **In scope: everything up to 30.75 MB.** A 32 MB MiSTer SDRAM module holds the ROM for the
   largest of them with roughly 1.25 MB to spare — see "Memory plan" for what else has to fit and
   what has to move to DDR3.
-- **Out of scope: `f1superb`.** 56.75 MB does not fit a 32 MB module, and it is the one set MAME
-  itself does not run (road always rendered straight, an undumped maths coprocessor doing
-  perspective, `MACHINE_NODEVICE_LAN`). Two independent reasons; it is not a close call.
+- **`f1superb` is in scope again, in its own build.** Both reasons it was excluded have gone: MAME
+  PR 16135 runs it, and the set targets a larger SDRAM module. See "F-1 Super Battle".
 - **Mahjong sets (`suchie2`, `akiss`, `kirarast`, `bnstars`) are in scope but late.** They need the
   `m_mahjong_input_select` keyboard-matrix path (`0xfd1c0000`) and a mahjong controller mapping in
   the `.mra`, which is separable work.
@@ -833,6 +832,223 @@ Conventions, all carried over and all described in [`WORKFLOW.md`](WORKFLOW.md):
   audience; note it early rather than discovering it at release.
 - **NVRAM persistence** across core loads is a real feature on this hardware (5.5 V battery), not a
   high-score nicety. Games will run their own NVRAM checks.
+
+## F-1 Super Battle
+
+`f1superb` was out of scope on two counts: 56.75 MB of ROM against a 32 MB module, and MAME could
+not run it. The second is settled by [mamedev/mame#16135](https://github.com/mamedev/mame/pull/16135)
+(Andrea Bogazzi), which adds the Jaleco "FPU" maths coprocessor as a CPU core (`cpu/jalfpu`), the
+per-line road plane, priority-RAM mixing and the analog input fix, and moves the set to working. The
+first is settled by targeting a larger SDRAM module for this set alone (project owner's decision).
+
+### Its own Quartus revision
+
+`MS32F1`, beside `MS32` and `MS32_stp`, with `F1SUPERB` defined. The main core is at 36,459 ALMs
+(87%) and 531 of 553 RAM blocks, so the road plane and two FPUs do not fit beside the other 21 sets
+without taking something away from them. Same repository, same RTL: only the f1superb blocks are
+behind the define. Its `.mra` carries `<rbf>JalecoMS32F1</rbf>`, so the right core loads by itself.
+
+**It builds and it closes timing.** With the ISSP probes in, as `MS32_stp` has them:
+
+| | MS32F1 | MS32_stp |
+|---|---|---|
+| ALMs | 39,864 / 41,910 (95%) | 36,459 (87%) |
+| RAM blocks | 551 / 553 (100%) | 531 |
+| block memory bits | 4,244,281 / 5,662,720 (75%) | — |
+| DSP | 60 / 112 (54%) | 6 |
+| worst setup slack | +0.099 ns (HDMI), +0.550 (clk_sys), +0.914 (clk_ymf) | — |
+
+Every clock has positive setup and hold slack -- at fitter seed 3. The device is full enough that
+the seed decides it: the first build of this revision passed at +0.267 ns on the HDMI pixel clock
+with 39,592 ALMs, and adding the road-plane and FPU probes (315 ALMs) put seeds 1 and 2 at -0.134
+and -0.184 on that same clock. It is the framework scaler's path, not this core's, and what fails is
+routing under congestion. Two RAM blocks and 2,000 ALMs are left, so anything further added here has
+to pay for itself; the probes are the obvious thing to drop in a release build. `build_staged.py`'s presence check is now per-revision, since `ms32_roz`
+and `ms32_mixer` are legitimately absent here and `ms32_lineplane`, `ms32_mixer_f1` and `jalfpu`
+must be present instead.
+
+### What the hardware costs
+
+Block RAM. MAME declares 64 KB for each road RAM; the game uses a small part of each. Measured over
+three minutes of attract and the driving demo, with counters compiled into the MAME build
+(`scripts/mame/f1superb_trace.patch`):
+
+| RAM | MAME declares | the game touches | M10K |
+|---|---|---|---|
+| Road VRAM (`fdc00000`) | 32,768 x 16 | 448 words (0-0x1BF), 1.64M writes | 1 |
+| Road line RAM (`fde00000`) | 32,768 x 16 | 2,048 words (0-0x7FF), 2.43M writes | 4 |
+| FPU program RAM x2 | 1,024 x 20 each | all of it | 4 |
+| FPU data RAM x2 | 0x900 x 16 each | — | 16 |
+| TX VRAM latch (the PR latches TX per frame) | 8,192 x 16 | — | 16 |
+
+So 25 blocks for the road plane and the two FPUs, not the 152 a straight port would take: nothing
+has to move to SDRAM and the ROZ cache keeps its 34 blocks. The road RAMs are sized to what the
+game uses, with the decode wrapping rather than the address widening — if some mode reaches past
+0x1BF or 0x7FF it will alias, so the F1 build keeps a probe counter on it. Whether the TX latch can
+be a per-line latch rather than a whole copy is unmeasured; the FPU data RAM is 4,096 deep because
+the map declares 0x900 words, which is over 2,048.
+
+The FPU is a maths unit: a 16x16 multiply and a 32/16 divide are single instructions. It is the
+stated exception to the no-multiply rule (`docs/WORKFLOW.md` §13) — 54 DSP blocks are free.
+
+### The 64 MB map
+
+The vendored controller already addresses 64 MB: `sdram.sv` carries byte address bit 25 as column
+A9, and the surrounding stack is 26-bit throughout (Fuuki widened it). f1superb's regions do not fit
+around the existing bases, so the map is selected by a mod-byte bit (bit 6 is free) and the current
+32 MB layout is untouched for every other set:
+
+| region | size | base, standard map | base, f1superb map |
+|---|---|---|---|
+| `maincpu` | 2M | `000_0000` | `000_0000` |
+| `txtiles` | 0.5M | `020_0000` | `020_0000` |
+| `bgtiles` | 4M / 2M | `028_0000` | `028_0000` |
+| `roztiles` | 4M / 8M | `068_0000` | `068_0000` |
+| `gfx5` (road textures) | - / 8M | - | `0E8_0000` |
+| `audiocpu` | 0.25M | `1B8_0000` | `168_0000` |
+| `ymf` | 4M | `1BC_0000` | `16C_0000` |
+| `sprite` | 17M / 32M | `0A8_0000` | `1AC_0000` |
+| object RAM (live copy) | 256K | `1FC_0000` | `3FC_0000` |
+
+56.75 MB of ROM, a 58.75 MB stream (`LENGTH_F1 = 0x3AC_0000`), in a 64 MB space. Only the f1superb
+build needs a module larger than 32 MB; that goes in the README beside the set. `build_mra.py`'s
+`check_map()` reads both maps back out of `ms32_sdram_top.sv`, so the table above is the only copy
+that can go stale -- it is not checked.
+
+### Stages
+
+1. **ROM image and map.** `build_rom_image.py` stops excluding `f1superb`, gains its `gfx5` region,
+   and both maps go into `build_mra.py`'s `MAP` check and `ms32_sdram_top.sv`. Verifiable with no new
+   hardware: the image builds, the `.mra` generates, the sizes are arithmetic.
+2. **MAME reference. Done.** The PR branch is a git worktree at `E:/mame-f1` (`f1superb-work`),
+   built as the `ms32` subtarget. `scripts/mame/f1superb_trace.patch` adds, to that build only:
+   native counters for the road RAMs and the priority RAM (`MS32_TRACE=<file>`), and a reference
+   trace of each FPU (`JALFPU_TRACE=<dir>`) as one ordered event stream — host writes, routine
+   starts, and the whole register file after every instruction. A Lua tap on the same ranges ran the
+   game at under a frame a second; the native counters cost nothing.
+3. **The FPU. Done.** `rtl/cpu/jalfpu/jalfpu.sv`, a transcription of `jalfpu.cpp`: 20-bit
+   instructions, 16 registers, two loop counters, a 4-deep call stack, one delay slot, the sign
+   register, the host window. One DSP multiply and a 16-step restoring divider (the §13 exception).
+   `sim/jalfpu_tb` replays the MAME trace — host writes with the core frozen, then one instruction
+   per traced instruction, diffing all 16 registers, both counters, the flags, the sign register and
+   the stack pointer. **600,000 instructions, 300,000 from each FPU, 0 mismatches**, covering every
+   opcode group the program uses: both divides, all three multiply forms, the shifts and rotates,
+   the register-group operations, and branches with and without delay slots. Not covered because the
+   program never uses them: `or`, and the function codes MAME itself logs as unimplemented.
+4. **The road plane. Modelled, not yet in RTL.** Both of f1superb's rotating planes are line
+   planes: `f1layout` makes a tile one 2048x1 strip of texture, so the map is 1 tile wide by 0x400
+   tall and a row of it is a scanline of road. Per screen line the line RAM gives start and
+   increments exactly as ROZ super mode does, `vram[row*2] == 0` leaves the line transparent, and
+   `vram[row*2+1]` bits 6-4 are the depth the priority RAM is indexed with. The road plane draws
+   `gfx5` at palette bank 0x50; the ROZ plane draws `roztiles` the same way at 0x2000.
+   `scripts/render_model.py` renders both, plus the 13-bit priority-RAM mixing, and
+   `scripts/mame_capture.py` captures the three extra regions. **A full driving frame (f1superb,
+   frame 4201) comes out 71,680 of 71,680 pixels identical to MAME's.** Frame 4200 differs in 52
+   pixels of the HUD digits, which is that dump, not the model. Two things that cost an afternoon:
+   the sprite priority nibble goes into the index unshifted, and f1superb's BG is the 256x16 layout
+   -- `bgmode` is write-only, so a capture without `--wlog` reads it as 0 and every BG pixel is
+   wrong.
+
+   **The engine is written**: `rtl/video/ms32_lineplane.sv`, one module instantiated twice
+   (`WRAP` for the road, clipping for the ROZ plane), with ms32_roz's shape -- double line
+   buffer, the same overrun reporting -- but **no cache at all**: one granule held in registers.
+   A 64-entry direct-mapped cache was written first and then measured against it over a driving
+   frame's 263 lines: it saved 3.8% of the fetches (13,669 against 14,184) and cost a pipeline
+   stage, since a tag in an M10K has to be read before it can be compared. The held granule
+   compares in the cycle the map's colour word arrives, so a pixel is four clocks rather than
+   five, and the worst line came out faster in spite of the extra fetches -- 5,773 clocks against
+   6,093 at ROM latency 12. Two M10K saved, one per plane. `sim/lineplane_tb` drives both planes
+   from the capture and compares against the model: **71,680 of 71,680 pixels each, exactly**.
+
+   **The line budget, after prefetching.** A line is 6,144 clocks. The engine is in two parts with
+   a four-deep queue between them: a generator that walks x and pushes each pixel's granule, byte,
+   colour and transparency, and a fetcher that touches the ROM only when the granule changes. The
+   generator keeps its lead while the ROM answers, so a run of misses costs about one latency each
+   rather than a latency plus the walk. Worst road line, same frame:
+
+   | ROM latency | before the queue | with it |
+   |---|---|---|
+   | 12 | 5,773 | 4,818 |
+   | 16 | 5,973, overrun | 6,098 |
+   | 20 | 6,001, overrun | overrun |
+
+   So latency 16 now fits where it did not. Past that the limit is structural: at the horizon each
+   of the 320 pixels needs its own granule, and with one request in flight 320 round trips do not
+   fit in 6,144 clocks at latency 20. That would take a second outstanding request, which is a
+   change to the memory stack rather than to this engine. Until then the horizon line shows late
+   under heavy contention, and the probe counts it.
+5. **Priority RAM mixing. Done.** `rtl/video/ms32_mixer_f1.sv` forms MAME's 13-bit index per dot
+   and reads the priority RAM's spare port, then selects the layer, the backdrop or nothing and
+   halves the brightness on bit 2 clear. It is a separate module from `ms32_mixer`, which keeps the
+   three probes and the case table the other 21 sets use; nothing about them changes.
+
+   `sim/f1mix_tb` puts the whole video path together -- both line planes, both tilemaps, the mixer,
+   the capture's priority and palette RAMs -- and compares against MAME's own screenshot:
+   **71,680 of 71,680 pixels, exactly.** The sprite engine is not in that bench, being the one the
+   other sets already use; its word per dot comes from the model. `bgmode` has to be passed with
+   `+BGMODE=1`, the register being write-only.
+6. **Inputs and the rest. Written, unverified on hardware.** `analog_r()` returns
+   `{AN2, AN2, AN1, AN0}`, and only two of those three are controls: AN0 is the accelerator pot,
+   which *rests at 0x50 and falls towards 0* as it is pressed, and AN1 is the steering about a 0x80
+   centre. AN2 is a bank of eight pulled-up switches MAME does not identify and leaves at 0xFF. The
+   brake and the shifter are not analog at all -- they are INPUTS bits 1 and 0, and the shifter is
+   `PORT_TOGGLE`, a two-position lever rather than a held button. f1superb's INPUTS keeps only those
+   two, the coins, service, test and start.
+
+   So: button 1 accelerator, button 2 brake, button 3 the gear (one press changes it). Steering
+   takes the left stick's X when it is off centre, and otherwise ramps from the d-pad -- 128 steps
+   at clk_sys/2^18, about 0.35 s to full lock -- because steering that jumps to lock is not
+   steering.
+
+   The second DIP bank, DSW2 on the MB-93159 board at `fd0d0000`, is in the `.mra` now: the same
+   index-254 stream carries eight bytes instead of four, DSW2's switches sit at bit 32 and up, and
+   the F1SUPERB build stores eight. It defaults to Master, car 1, as MAME does.
+
+   The F1-93159 link board is not dumped, so no network, as in MAME.
+
+### On the board
+
+It runs. The first bitstream drew no road at all, and the probe said why in one
+number: **2 FPU routines started in 3,350 frames**. `ms32_sysctrl` implemented
+interrupt levels 0, 1, 9 and 10; `fpu0_irq_w` and `fpu1_irq_w` raise 5 and 2,
+and nothing consumed `jalfpu`'s `irq` output. The game started a routine, waited
+for an interrupt that never came, and stopped. The road follows from that: the
+line RAM is what the FPUs compute, and `draw_line_plane` leaves a line
+transparent where `vram[2 row]` is zero.
+
+With the interrupts connected, measured over 719 frames: **4.3 FPU routines a
+frame**, longest routine 136,781 clk_cpu clocks (41% of a frame, so `CE_DIV = 2`
+is fast enough), **263 road lines drawn per frame**, no road-plane overrun, one
+late road line in 719 frames, and no road write outside the RAMs. A screenshot
+of the attract mode shows the car on tarmac.
+
+Two things that were *not* the fault, ruled out by measurement rather than
+argument, and worth recording because both looked plausible:
+
+- **The sprite engine.** Parts of the car looked flipped, and of the captures
+  this core has verified pixel-exact not one contains a flipped sprite
+  (f1superb: 78 drawn, 20 flipx, 63 zoomed; tetrisp-title, p47aces and gametngk:
+  none at all), so the flip path had never been checked against anything.
+  `sim/sprite_tb` on the f1superb capture: **71,680 of 71,680 pixels match the
+  model**. The engine is right; the flipping was the OSD's Rotation set to CCW
+  on a ROT0 set, saved in the core's own `.cfg`.
+- **Road RAM aliasing.** The RAMs are sized to measured use with the decode
+  wrapping, so a write past 0x1BF or 0x7FF would alias silently. The counter
+  reads 0.
+
+One real divergence came out of re-reading the driver while looking: `fd0c0000`
+is `.ram()` with no `umask32`, unlike every other 16-bit region on this bus, so
+it is a full 32-bit RAM. This core had it 16-bit and dropped the top half of
+every write. 1,024 longs now, the same 32 Kbit of M10K.
+
+### Unknowns
+
+- The FPU clock is unknown (the PR says so). Whatever is chosen has to be stated in the core and
+  checked against the game's own timing, not assumed.
+- Sprite fetch from a 32 MB region has never been measured here; the region is four times the
+  largest so far, and the sprite ROM address mask (`spr25`) grows with it.
+- The FPU's throughput against the game's own timing. It is clocked at clk_cpu here with `CE_DIV`
+  available; nothing has yet checked that the game's routines finish in the frame they must.
 
 ## Next steps
 
