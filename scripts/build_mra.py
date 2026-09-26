@@ -91,7 +91,8 @@ NAMES["gametngk"] = "The Game Paradise - Master of Shooting! (ver 1.0)"
 INPUTS = {s: g["inputs"] for s, g in GAMES.items()}
 # region order in the SDRAM map, with the sizes ms32_sdram_top.sv reserves. Two maps,
 # as the core has: the 32 MB one every in-scope set uses, and f1superb's 64 MB one
-# (8 MB of ROZ tiles, the 8 MB gfx5 road textures, a 32 MB sprite region).
+# (8 MB of ROZ tiles, the 8 MB gfx5 road textures, a 32 MB sprite region). The
+# f1superb image is 64 MB in DDR3; its SDRAM copy leaves out gfx5 and sprite.
 MAP = [("maincpu", 0x000_0000, 0x200000), ("txtiles", 0x020_0000, 0x080000), ("bgtiles", 0x028_0000, 0x400000),
        ("roztiles", 0x068_0000, 0x400000), ("sprite", 0x0A8_0000, 0x1100000), ("audiocpu", 0x1B8_0000, 0x040000),
        ("ymf", 0x1BC_0000, 0x400000)]
@@ -256,6 +257,7 @@ def switches_xml(game):
 # and the shift toggle. "-" marks a button the game does not use. Filled in
 # by the project owner from the manuals.
 BUTTONS = {
+    "f1superb": ["Accelerator", "Brake", "Shifter"],
 }
 # the rest of the list stays where CONF_STR's J1 line has it: the core reads
 # fixed bits, so these may not move
@@ -275,9 +277,7 @@ def buttons_xml(game):
     return [f'  <buttons names="{esc(",".join(names))}" default="{BUTTONS_DEFAULT}"/>']
 
 
-# sets kept out of the main list: a known game-breaking fault (README, Status).
-# f1superb joins them there for a different reason -- its JalecoMS32F1 build does
-# not exist yet -- and moves out when it does.
+# sets kept out of the main list: a known game-breaking fault (README, Status)
 UNSUPPORTED = {"wpksocv2"}
 
 
@@ -296,7 +296,7 @@ def main():
         parent = PARENT.get(game)
         if cap:
             out_dir = REPO / "releases" / "_dev"
-        elif game in UNSUPPORTED or game == F1:
+        elif game in UNSUPPORTED:
             out_dir = REPO / "releases" / "unsupported"
         elif parent in SETS:
             out_dir = REPO / "releases" / "_alternatives" / f"_{NAMES[parent]}"
@@ -323,7 +323,7 @@ def main():
                | (0x10 if spr_size > 0x1000000 else 0) | (0x20 if uses_mahjong(game) else 0)
                | (0x40 if game == F1 else 0) | (0x80 if cap else 0))
         xml.append(f'  <rom index="1"><part>{mod:02X}</part></rom>   <!-- mod byte: key {SET_KEY[game]}'
-                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", mahjong keys" if uses_mahjong(game) else ""}{", 64 MB map" if game == F1 else ""}{", CPU held" if cap else ""} -->')
+                   f'{", vblank/field swapped" if game in INVERT_LINES else ""}{", ROT270" if game in ROT270 else ""}{", mahjong keys" if uses_mahjong(game) else ""}{", F1 map" if game == F1 else ""}{", CPU held" if cap else ""} -->')
         zips = f"{game}.zip" + (f"|{PARENT[game]}.zip" if game in PARENT else "")
         # address: the HPS writes the image into DDR3 and ms32_rom_loader copies it to SDRAM
         # (MS32.sv, "FAST ROM LOAD"). Not for capture playback: the copy holds the video

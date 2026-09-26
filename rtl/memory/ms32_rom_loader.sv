@@ -23,7 +23,7 @@ module ms32_rom_loader #(
 	input  logic         clk,
 	input  logic         reset,
 
-	// the image's length: LENGTH, or f1superb's longer 64 MB map (mod byte bit 6)
+	// f1superb's map (mod byte bit 6): copy only what is read from SDRAM
 	input  logic         bigmap,
 
 	input  logic         start,       // pulse
@@ -41,7 +41,12 @@ module ms32_rom_loader #(
 	input  logic         l_wait       // ms32_sdram_top's ioctl_wait
 );
 
-	localparam logic [27:0] LENGTH_F1 = 28'h3AC_0000;   // f1superb's map ends after its 32 MB sprite region
+	// f1superb reads its road textures (gfx5, 0xE80000-0x167FFFF) and its sprite
+	// ROM (0x1AC0000 on) from the image in DDR3 (ms32_ddr_reader), so neither is
+	// copied: what is left ends below 32 MB and the set runs on a 32 MB module.
+	localparam logic [27:0] GFX5_F1   = 28'h0E8_0000;
+	localparam logic [27:0] AUDIO_F1  = 28'h168_0000;
+	localparam logic [27:0] LENGTH_F1 = 28'h1AC_0000;
 
 	typedef enum logic [2:0] {L_IDLE, L_RD, L_RDWAIT, L_BYTE, L_HOLD, L_WAIT} lst_t;
 	lst_t st;
@@ -75,7 +80,7 @@ module ms32_rom_loader #(
 				end else if (base + 28'd8 >= (bigmap ? LENGTH_F1 : LENGTH)) begin
 					st <= L_IDLE;
 				end else begin
-					base <= base + 28'd8;
+					base <= (bigmap && base + 28'd8 == GFX5_F1) ? AUDIO_F1 : base + 28'd8;
 					st   <= L_RD;
 				end
 			end

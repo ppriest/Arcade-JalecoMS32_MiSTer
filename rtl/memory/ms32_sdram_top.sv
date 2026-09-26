@@ -70,7 +70,7 @@ module ms32_sdram_top (
 	output wire         ioctl_wait,
 	input  wire  [1:0]  key,            // decryption key select (mod byte)
 	input  wire         spr25,          // 25-bit sprite address mask (mod byte bit 4)
-	input  wire         bigmap,         // F-1 Super Battle's 64 MB map (mod byte bit 6)
+	input  wire         bigmap,         // F-1 Super Battle's map (mod byte bit 6)
 
 	// tile engines: region-local byte address of an 8-byte granule
 	input  wire         tx_req,  input wire [23:0] tx_addr,  output wire tx_valid,  output wire [63:0] tx_data,
@@ -105,10 +105,12 @@ module ms32_sdram_top (
 
 	// Two region maps, chosen by bigmap; scripts/build_mra.py reads both from
 	// here and lays each .mra out to match (its MAP / MAP_F1, checked at build).
-	// The 32 MB map holds every set up to 30.75 MB. F-1 Super Battle is 56.75 MB
-	// and needs a larger module: its ROZ region is 8 MB rather than 4, it adds
-	// the 8 MB gfx5 road textures, and its sprite region is 32 MB, so everything
-	// after the ROZ tiles moves (ROADMAP, "F-1 Super Battle").
+	// The 32 MB map holds every set up to 30.75 MB. F-1 Super Battle's image is
+	// 58.75 MB: its ROZ region is 8 MB rather than 4, it adds the 8 MB gfx5 road
+	// textures, and its sprite region is 32 MB, so everything after the ROZ
+	// tiles moves (ROADMAP, "F-1 Super Battle"). Its gfx5 and sprite regions are
+	// read from DDR3 and never copied here (ms32_rom_loader), so what the SDRAM
+	// holds ends at 0x1AC0000 and a 32 MB module is enough.
 	wire [25:0] BASE_MAINCPU  = 26'h000_0000;
 	wire [25:0] BASE_TXTILES  = 26'h020_0000;
 	wire [25:0] BASE_BGTILES  = 26'h028_0000;
@@ -117,7 +119,7 @@ module ms32_sdram_top (
 	wire [25:0] BASE_AUDIOCPU = bigmap ? 26'h168_0000 : 26'h1B8_0000;
 	wire [25:0] BASE_YMF      = bigmap ? 26'h16C_0000 : 26'h1BC_0000;
 	wire [25:0] BASE_SPRITE   = bigmap ? 26'h1AC_0000 : 26'h0A8_0000;
-	wire [25:0] BASE_OBJRAM   = bigmap ? 26'h3FC_0000 : 26'h1FC_0000;  // above the ROM image
+	wire [25:0] BASE_OBJRAM   = 26'h1FC_0000;                          // above the ROM image
 	localparam logic [23:0] MASK_TX  = 24'h07_FFFF;
 	localparam logic [23:0] MASK_BG  = 24'h3F_FFFF;
 	wire       [23:0] mask_roz = bigmap ? 24'h7F_FFFF : 24'h3F_FFFF;

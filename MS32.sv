@@ -127,7 +127,8 @@ wire   [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire  [31:0] joystick_0, joystick_1;
-wire  [15:0] joy_analog_0;              // {y, x}, signed, for F-1 Super Battle's wheel
+wire  [15:0] joy_analog_0;              // {y, x}, signed: F-1 Super Battle's wheel and accelerator
+wire  [15:0] joy_analog_r0;             // {y, x}, signed: F-1 Super Battle's accelerator
 
 wire        ioctl_download;
 wire [15:0] ioctl_index;
@@ -204,6 +205,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.joystick_0(joystick_0),
 	.joystick_l_analog_0(joy_analog_0),
+	.joystick_r_analog_0(joy_analog_r0),
 	.joystick_1(joystick_1),
 	.ps2_key(ps2_key)
 );
@@ -292,7 +294,19 @@ always @(posedge clk_sys) begin
 	shift_d <= joystick_0[6];
 	if (joystick_0[6] && !shift_d) shift_hi <= ~shift_hi;
 end
-wire [7:0] analog_accel = joystick_0[4] ? 8'h00 : 8'h50;   // button 1, pressed falls to 0
+// The accelerator is a pedal: either stick pushed up (the left one's Y is
+// where some wheels put their pedal), scaled from 0..127 to 0..0x50 by
+// 1/2 + 1/8 + 1/32 and clamped; button 1 is the pedal to the floor.
+function automatic [6:0] stick_up(input [7:0] y);   // -127 is up
+	stick_up = !y[7] ? 7'd0 : (y == 8'h80) ? 7'd127 : 7'(-y);
+endfunction
+wire [6:0] up_l = stick_up(joy_analog_0[15:8]);
+wire [6:0] up_r = stick_up(joy_analog_r0[15:8]);
+wire [6:0] up_a = (up_l > up_r) ? up_l : up_r;
+wire [6:0] up_s = {1'b0, up_a[6:1]} + {3'b0, up_a[6:3]} + {5'b0, up_a[6:5]};
+reg  [7:0] analog_accel = 8'h50;
+always @(posedge clk_sys)
+	analog_accel <= joystick_0[4] ? 8'h00 : (up_s >= 7'd80) ? 8'h00 : 8'h50 - {1'b0, up_s};
 wire [7:0] analog_an2   = 8'hFF;
 wire       f1_brake     = joystick_0[5];                   // button 2, INPUTS bit 1
 

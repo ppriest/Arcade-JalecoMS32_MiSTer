@@ -912,10 +912,11 @@ around the existing bases, so the map is selected by a mod-byte bit (bit 6 is fr
 | `audiocpu` | 0.25M | `1B8_0000` | `168_0000` |
 | `ymf` | 4M | `1BC_0000` | `16C_0000` |
 | `sprite` | 17M / 32M | `0A8_0000` | `1AC_0000` |
-| object RAM (live copy) | 256K | `1FC_0000` | `3FC_0000` |
+| object RAM (live copy) | 256K | `1FC_0000` | `1FC_0000` |
 
-56.75 MB of ROM, a 58.75 MB stream (`LENGTH_F1 = 0x3AC_0000`), in a 64 MB space. Only the f1superb
-build needs a module larger than 32 MB; that goes in the README beside the set. `build_mra.py`'s
+56.75 MB of ROM, a 58.75 MB stream, laid out in a 64 MB space in DDR3. The road textures and the
+sprite ROM are read from the DDR3 image (`ms32_ddr_reader`), so `ms32_rom_loader` copies only
+`000_0000`-`0E7_FFFF` and `168_0000`-`1AB_FFFF` into SDRAM and the set runs on a 32 MB module. `build_mra.py`'s
 `check_map()` reads both maps back out of `ms32_sdram_top.sv`, so the table above is the only copy
 that can go stale -- it is not checked.
 

@@ -95,3 +95,22 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # Keep this file identical to MS32.qsf above this block.
 # ---------------------------------------------------------------------------
 set_global_assignment -name VERILOG_MACRO "F1SUPERB=1"
+
+# The HDMI output stage's last core registers (sys_top.v: hs, vs, de, d) in a
+# region between the OSD and the HDMI pins, which run along the bottom edge
+# from X2 to X66. Unconstrained, at this revision's fill the fitter left de and
+# vs by the OSD at the top of the device, and the wire from there to the pins'
+# output registers missed the 148.5 MHz clock on three seeds (-0.309, -0.336,
+# -0.109 ns). The region keeps each of the two hops at most half the device.
+set_global_assignment -name LL_ENABLED ON -section_id hdmi_out
+set_global_assignment -name LL_AUTO_SIZE OFF -section_id hdmi_out
+set_global_assignment -name LL_STATE LOCKED -section_id hdmi_out
+set_global_assignment -name LL_RESERVED OFF -section_id hdmi_out
+set_global_assignment -name LL_CORE_ONLY ON -section_id hdmi_out
+set_global_assignment -name LL_ORIGIN X30_Y8 -section_id hdmi_out
+set_global_assignment -name LL_WIDTH 21 -section_id hdmi_out
+set_global_assignment -name LL_HEIGHT 16 -section_id hdmi_out
+set_instance_assignment -name LL_MEMBER_OF hdmi_out -to hs -section_id hdmi_out
+set_instance_assignment -name LL_MEMBER_OF hdmi_out -to vs -section_id hdmi_out
+set_instance_assignment -name LL_MEMBER_OF hdmi_out -to de -section_id hdmi_out
+set_instance_assignment -name LL_MEMBER_OF hdmi_out -to d[*] -section_id hdmi_out

@@ -68,7 +68,7 @@ ddram_phy u_phy (
 	.req(ddr_req), .we(1'b0), .addr(ddr_addr), .wdata(8'd0),
 	.busy(ddr_busy), .valid(ddr_valid), .rdata(ddr_rdata)
 );
-// +F1=1: F-1 Super Battle's 64 MB map instead of the 32 MB one
+// +F1=1: F-1 Super Battle's map instead of the 32 MB one
 reg f1 = 0;
 initial f1 = $test$plusargs("F1");
 ms32_rom_loader #(.LENGTH(28'h1FC_0000)) u_ldr (
@@ -132,12 +132,26 @@ task check(input string name, input integer base, input integer size, input inte
 	end
 endtask
 
+// a region the loader must leave alone: still the fill pattern
+task check_blank(input string name, input integer base, input integer size);
+	begin
+		bad = 0;
+		for (k = base >> 1; k < (base + size) >> 1; k = k + 1)
+			if (u_chip.mem[k] !== 16'hEEEE) begin
+				if (bad < 4) $display("  %s +%06x: written, %04x", name, 2 * k - base, u_chip.mem[k]);
+				bad = bad + 1;
+			end
+		$display("%-16s %0d of %0d words written", name, bad, size >> 1);
+		total_bad = total_bad + bad;
+	end
+endtask
+
 integer t0;
 initial begin
 	if (!$value$plusargs("GAME=%s", GAME)) GAME = "tetrisp";
 	if (!$value$plusargs("KEY=%d", KEY))   KEY = 1;
 	if (!$value$plusargs("STREAM=%s", STREAM)) STREAM = {"simout/", GAME, "_stream.bin"};
-	if (!$value$plusargs("LEN=%h", LEN))   LEN = f1 ? 28'h3AC_0000 : 28'h1FC_0000;
+	if (!$value$plusargs("LEN=%h", LEN))   LEN = f1 ? 28'h1AC_0000 : 28'h1FC_0000;
 	fd = $fopen(STREAM, "rb"); if (fd == 0) begin $display("FATAL no %s", STREAM); $finish; end
 	n = $fread(stream, fd); $fclose(fd);
 	$display("stream %0d bytes, copying %0d", n, LEN);
@@ -163,12 +177,12 @@ initial begin
 		check("sprite",       26'h0A8_0000, 26'h100_0000, 1);
 		check("audiocpu",     26'h1B8_0000, 26'h004_0000, 1);
 		check("ymf",          26'h1BC_0000, 26'h040_0000, 1);
-	end else begin   // scripts/build_mra.py's MAP_F1
+	end else begin   // scripts/build_mra.py's MAP_F1; gfx5 and sprites stay in DDR3
 		check("roztiles",     26'h068_0000, 26'h080_0000, 1);
-		check("gfx5",         26'h0E8_0000, 26'h080_0000, 1);
+		check_blank("gfx5",   26'h0E8_0000, 26'h080_0000);
 		check("audiocpu",     26'h168_0000, 26'h004_0000, 1);
 		check("ymf",          26'h16C_0000, 26'h040_0000, 1);
-		check("sprite",       26'h1AC_0000, 26'h200_0000, 1);
+		check_blank("above",  26'h1AC_0000, 26'h254_0000);   // to 64 MB
 	end
 	$display("ROMLOAD: %0d bytes differ in total", total_bad);
 	$finish;
