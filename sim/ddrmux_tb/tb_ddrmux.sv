@@ -3,8 +3,9 @@
 //  ms32_ddram_mux with all three clients against a DDR3 model:
 //    core     80-beat read and write bursts, RD offered only when !c_busy
 //             (as ms32_sprite_fb does), every read beat checked
-//    g        single-beat reads, as many in flight as the tags allow,
-//             every answer checked, in order
+//    g        two clients through ms32_ddr_g2 (the road and sprite readers),
+//             single-beat reads, up to 32 in flight each, every answer
+//             checked, in order, per client
 //    rotator  single-beat writes on random clocks
 //  The model takes a command when !BUSY (busy on a random share of clocks),
 //  answers reads in order LAT clocks after, one beat a clock, with a pattern
@@ -27,6 +28,8 @@ endfunction
 
 // --------------------------------------------------------------- the DUT
 wire        c_busy, c_dout_ready, g_ack, g_dout_ready, fifo_overflow;
+wire        g_rd;
+wire [28:0] g_addr;
 wire [63:0] c_dout;
 reg  [7:0]  c_burstcnt = 8'd80;
 reg  [28:0] c_addr = 0;
@@ -35,8 +38,6 @@ wire        c_rd;
 reg  [63:0] c_din = 0;
 reg  [28:0] r_addr = 0;
 reg         r_we = 0;
-reg         g_rd = 0;
-reg  [28:0] g_addr = 0;
 
 wire        DDRAM_BUSY;
 wire [7:0]  DDRAM_BURSTCNT;
@@ -132,27 +133,51 @@ always @(posedge clk) if (!reset && c_dout_ready && c_state != 2) begin
 	$display("ERROR %0d: core beat outside a read", cyc); errors = errors + 1;
 end
 
-// ---------------------------------------------------------------- g
-reg [28:0] g_q [0:65535];
-integer    g_wp = 0, g_rp = 0, g_done = 0;
+// ------------------------------------------------- g: two clients via ms32_ddr_g2
+reg         ga_rd = 0, gb_rd = 0;
+reg  [28:0] ga_addr = 0, gb_addr = 0;
+wire        ga_ack, gb_ack, ga_rdy, gb_rdy;
+ms32_ddr_g2 u_g2 (
+	.clk(clk), .reset(reset),
+	.a_rd(ga_rd), .a_addr(ga_addr), .a_ack(ga_ack), .a_dout_ready(ga_rdy),
+	.b_rd(gb_rd), .b_addr(gb_addr), .b_ack(gb_ack), .b_dout_ready(gb_rdy),
+	.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout_ready(g_dout_ready)
+);
+reg [28:0] ga_q [0:65535];
+reg [28:0] gb_q [0:65535];
+integer    ga_wp = 0, ga_rp = 0, gb_wp = 0, gb_rp = 0, g_done = 0, ga_done = 0, gb_done = 0;
 always @(posedge clk) begin
-	if (reset) g_rd <= 0;
+	if (reset) begin ga_rd <= 0; gb_rd <= 0; end
 	else begin
-		if (g_rd && g_ack) begin g_q[g_wp % 65536] = g_addr; g_wp = g_wp + 1; end
-		if (!g_rd || g_ack) begin
-			// ms32_gfx5_ddr keeps at most 32 in flight
-			g_rd   <= !NOG && (($urandom % 8) != 0) && (g_wp - g_rp + (g_rd && g_ack ? 1 : 0) < 32);
-			g_addr <= 29'h01D0000 + ($urandom % 1000000);
+		if (ga_rd && ga_ack) begin ga_q[ga_wp % 65536] = ga_addr; ga_wp = ga_wp + 1; end
+		if (gb_rd && gb_ack) begin gb_q[gb_wp % 65536] = gb_addr; gb_wp = gb_wp + 1; end
+		// each keeps at most 32 in flight, as ms32_ddr_reader does
+		if (!ga_rd || ga_ack) begin
+			ga_rd   <= !NOG && (($urandom % 8) != 0) && (ga_wp - ga_rp + (ga_rd && ga_ack ? 1 : 0) < 32);
+			ga_addr <= 29'h01D0000 + ($urandom % 1000000);
 		end
-		if (g_dout_ready) begin
-			if (g_rp == g_wp) begin $display("ERROR %0d: g beat with nothing asked", cyc); errors = errors + 1; end
-			else if (c_dout !== pat(g_q[g_rp % 65536])) begin
-				$display("ERROR %0d: g answer %0d got %h want %h", cyc, g_rp, c_dout, pat(g_q[g_rp % 65536])); errors = errors + 1;
+		if (!gb_rd || gb_ack) begin
+			gb_rd   <= !NOG && (($urandom % 4) != 0) && (gb_wp - gb_rp + (gb_rd && gb_ack ? 1 : 0) < 32);
+			gb_addr <= 29'h0600000 + ($urandom % 1000000);
+		end
+		if (ga_rdy) begin
+			if (ga_rp == ga_wp) begin $display("ERROR %0d: a beat with nothing asked", cyc); errors = errors + 1; end
+			else if (c_dout !== pat(ga_q[ga_rp % 65536])) begin
+				$display("ERROR %0d: a answer %0d got %h want %h", cyc, ga_rp, c_dout, pat(ga_q[ga_rp % 65536])); errors = errors + 1;
 			end
-			g_rp = g_rp + 1; g_done = g_done + 1;
+			ga_rp = ga_rp + 1; ga_done = ga_done + 1; g_done = g_done + 1;
 		end
+		if (gb_rdy) begin
+			if (gb_rp == gb_wp) begin $display("ERROR %0d: b beat with nothing asked", cyc); errors = errors + 1; end
+			else if (c_dout !== pat(gb_q[gb_rp % 65536])) begin
+				$display("ERROR %0d: b answer %0d got %h want %h", cyc, gb_rp, c_dout, pat(gb_q[gb_rp % 65536])); errors = errors + 1;
+			end
+			gb_rp = gb_rp + 1; gb_done = gb_done + 1; g_done = g_done + 1;
+		end
+		if (ga_rdy && gb_rdy) begin $display("ERROR %0d: a beat routed to both", cyc); errors = errors + 1; end
 	end
 end
+wire [31:0] g_wp = ga_wp + gb_wp, g_rp = ga_rp + gb_rp;
 
 // ---------------------------------------------------------------- rotator
 always @(posedge clk) begin
@@ -168,8 +193,8 @@ initial begin
 	repeat (10) @(posedge clk);
 	reset = 0;
 	repeat (N) @(posedge clk);
-	$display("DDRMUX: %0d clocks, latency %0d, busy 1/%0d: core %0d reads %0d writes, g %0d answers, %0d still due, rotator overflow %0d, %0d errors",
-	         N, LAT, BUSY, c_reads, c_writes, g_done, g_wp - g_rp, fifo_overflow, errors);
+	$display("DDRMUX: %0d clocks, latency %0d, busy 1/%0d: core %0d reads %0d writes, g %0d answers (a %0d, b %0d), %0d still due, rotator overflow %0d, %0d errors",
+	         N, LAT, BUSY, c_reads, c_writes, g_done, ga_done, gb_done, g_wp - g_rp, fifo_overflow, errors);
 	$finish;
 end
 

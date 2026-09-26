@@ -17,7 +17,7 @@
 // c_busy depends only on this module's state and DDRAM_BUSY, never on the
 // core's RD/WE: the core's RD is itself gated by c_busy.
 //
-// A third client, g (ms32_gfx5_ddr: F-1 Super Battle's road textures), makes
+// A third client, g (ms32_ddr_reader: F-1 Super Battle's road textures and sprite ROM), makes
 // single-beat reads, many in flight. It issues only between the core's
 // transactions and after the rotator, and a read it offers while the port is
 // busy is held on the bus (M_GRD) until taken. Every read accepted, the core's
@@ -108,11 +108,11 @@ module ms32_ddram_mux #(
 	logic [7:0] left;
 
 	// ------------------------------------------------------------ read tags
-	// {owner: 1 = g, beats}, one per accepted read, in issue order. 64 deep:
-	// ms32_gfx5_ddr keeps at most 32 reads in flight, so a core read always
-	// finds a place. At 32 deep g filled it and the core starved (tb_ddrmux:
-	// 8 core reads in 200,000 clocks at latency 60).
-	localparam int TL = 6;
+	// {owner: 1 = g, beats}, one per accepted read, in issue order. 128 deep:
+	// g is up to two ms32_ddr_reader clients of 32 reads in flight each, so a
+	// core read always finds a place. At 32 deep, with one reader, g filled it
+	// and the core starved (tb_ddrmux: 8 core reads in 200,000 clocks).
+	localparam int TL = 7;
 	(* ramstyle = "MLAB, no_rw_check" *) logic [8:0] tags [0:(1 << TL) - 1];
 	logic [TL:0] t_wp, t_rp;
 	logic [7:0]  t_left;                         // beats still due for the head tag

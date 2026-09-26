@@ -81,28 +81,18 @@ module ms32_core (
 	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz,
 	output logic        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_road_ovr_ev, dbg_copy_done,
 	output logic [23:0] dbg_spr_cycles,
+	output logic [143:0] dbg_spr_wait,                              // sprite engine waits (ms32_sprite)
 	output logic [15:0] dbg_road_over,                             // F1SUPERB: road writes past the RAMs
 	output logic [15:0] dbg_road_vw, dbg_road_lw,                  // road map / line RAM writes
 	output logic [15:0] dbg_road_lines,                            // road lines drawn in the last frame
 	output logic [15:0] dbg_road_pens,                             // non-zero road pens in the last frame
-	output logic [12:0] dbg_spr_flipx, dbg_spr_flipy,              // flipped sprites in the last frame
 	output logic [12:0] dbg_spr_drawn,                             // sprites drawn in the last frame
-	output logic [15:0] dbg_fy_attr,                               // the first flipy sprite's attribute
-	output logic [11:0] dbg_fy_idx,                                // and the slot it came from
-	output logic [9:0]  dbg_road_row,                              // the row the road plane last selected
-	output logic [15:0] dbg_road_rowword,                          // and what vram[2 row] gave back
-	output logic [15:0] dbg_road_starty, dbg_road_offsy,           // the registers the row comes from
 	input  logic        dbg_mem_en,                                // the RAM window (clk_sys): regions 0-7 video,
-	input  logic [3:0]  dbg_mem_reg,                               // 8 FPU0 data, 9 FPU1 data, 10 FPU0 read log
+	input  logic [3:0]  dbg_mem_reg,                               // 8 and up: nothing
 	input  logic [15:0] dbg_mem_addr,
 	output logic [15:0] dbg_mem_data,
 	output logic [19:0] dbg_fpu_max,                               // F1SUPERB: longest FPU routine, clk_cpu clocks
 	output logic [15:0] dbg_fpu_runs,                              // F1SUPERB: FPU routines started
-	output logic [127:0] dbg_fpu_cnt,                              // F1SUPERB: per-FPU counts (ms32_cpu_sys)
-	output logic [63:0] dbg_pass,                                  // per field pass (ms32_cpu_sys)
-	output logic [15:0] dbg_fpu_ovl,                               // F1SUPERB: host writes into a running FPU0
-	output logic [15:0] dbg_chains,                                // F1SUPERB: FPU0 chains started
-	output logic [31:0] dbg_pre,                                   // F1SUPERB: FPU0 writes before chain 0 {count, hash}
 	output logic [31:0] dbg_pc                                   // clk_cpu
 );
 
@@ -130,8 +120,8 @@ module ms32_core (
 	logic [7:0]  priram_rdata;
 
 	// the RAM window's two halves: the video RAMs, and the FPUs' data RAMs
-	logic [15:0] dbg_vid_data, dbg_fpu_rdata, dbg_hash_rdata;
-	assign dbg_mem_data = !dbg_mem_reg[3] ? dbg_vid_data : dbg_mem_reg[1] ? dbg_hash_rdata : dbg_fpu_rdata;
+	logic [15:0] dbg_vid_data;
+	assign dbg_mem_data = dbg_mem_reg[3] ? 16'd0 : dbg_vid_data;
 
 	ms32_cpu_sys u_sys (
 		.clk_cpu(clk_cpu), .clk_sys(clk_sys), .rst_sys(sys_reset), .cpu_run_sys(cpu_run), .pause_sys(pause), .invert_lines(invert_lines),
@@ -140,10 +130,7 @@ module ms32_core (
 		.roadvram_addr(roadvram_addr), .roadvram_wel(roadvram_wel), .roadvram_weh(roadvram_weh), .roadvram_rdata(roadvram_rdata),
 		.roadline_addr(roadline_addr), .roadline_wel(roadline_wel), .roadline_weh(roadline_weh), .roadline_rdata(roadline_rdata),
 		.dbg_road_over(dbg_road_over), .dbg_road_vw(dbg_road_vw), .dbg_road_lw(dbg_road_lw),
-		.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs), .dbg_fpu_cnt(dbg_fpu_cnt), .dbg_pass(dbg_pass), .dbg_fpu_ovl(dbg_fpu_ovl),
-		.dbg_fpu_ren(dbg_mem_en && dbg_mem_reg[3] && !dbg_mem_reg[1]), .dbg_fpu_sel(dbg_mem_reg[0]),
-		.dbg_fpu_raddr(dbg_mem_addr[11:0]), .dbg_fpu_rdata(dbg_fpu_rdata),
-		.dbg_hash_raddr(dbg_mem_addr[9:0]), .dbg_hash_rdata(dbg_hash_rdata), .dbg_chains(dbg_chains), .dbg_pre(dbg_pre),
+		.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs),
 		.nv_addr(nv_addr), .nv_rdata(nv_rdata), .nv_written(nv_written),
 		.vreg_we(vreg_we), .vreg_off(vreg_off), .vreg_data(vreg_data),
 		.vblank_ev(vblank_ev), .field_ev(field_ev),
@@ -194,14 +181,10 @@ module ms32_core (
 		.vblank_ev(vblank_ev), .field_ev(field_ev), .timer_enable(),
 		.dis_tx(dis_tx), .dis_bg(dis_bg), .dis_roz(dis_roz), .dis_spr(dis_spr), .dis_road(dis_road),
 		.tx_overrun(tx_overrun), .bg_overrun(bg_overrun), .roz_overrun(roz_overrun), .road_overrun(road_overrun), .dbg_road_lines(dbg_road_lines), .dbg_road_pens(dbg_road_pens),
-		.dbg_spr_flipx(dbg_spr_flipx), .dbg_spr_flipy(dbg_spr_flipy),
-		.dbg_fy_attr(dbg_fy_attr), .dbg_fy_idx(dbg_fy_idx),
-		.dbg_road_row(dbg_road_row), .dbg_road_rowword(dbg_road_rowword),
-		.dbg_road_starty(dbg_road_starty), .dbg_road_offsy(dbg_road_offsy),
 		.dbg_mem_en(dbg_mem_en && !dbg_mem_reg[3]), .dbg_mem_reg(dbg_mem_reg[2:0]), .dbg_mem_addr(dbg_mem_addr), .dbg_mem_data(dbg_vid_data),
 		.spr_overrun(spr_overrun),
 		.fb_overrun(fb_overrun), .bad_primask(bad_primask),
-		.spr_frame_cycles(dbg_spr_cycles), .spr_drawn(dbg_spr_drawn),
+		.spr_frame_cycles(dbg_spr_cycles), .dbg_spr_wait(dbg_spr_wait), .spr_drawn(dbg_spr_drawn),
 		.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
 		.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_road_ovr_ev(dbg_road_ovr_ev), .dbg_copy_done(dbg_copy_done)
 	);

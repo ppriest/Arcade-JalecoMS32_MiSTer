@@ -6,7 +6,7 @@
 #   quartus_stp -t scripts/dump_ram.tcl trigger
 #
 # region: 0 road map, 1 road line RAM, 2 road_ctrl, 3 priority RAM,
-#         4 ROZ map, 5 ROZ line RAM, 6 TX map, 7 palette, 8 FPU0 data, 9 FPU1 data
+#         4 ROZ map, 5 ROZ line RAM, 6 TX map, 7 palette
 # trigger: pulse source bit 21, which has the core ask the HPS to upload the
 #         NVRAM slot and all eight regions to the .mra's .nvm file (MS32.sv)
 set region [lindex $argv 0]

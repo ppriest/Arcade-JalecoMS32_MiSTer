@@ -41,7 +41,20 @@
 // a 1:1 row costs one fetch per 8 pixels. The frame buffer write port is
 // x/y/data with a ready for back-pressure; what is behind it (DDR3, and
 // the per-frame clear) is ms32_sprite_fb's business.
-module ms32_sprite (
+// DDR=1 (F-1 Super Battle: sprite ROM read from DDR3 through ms32_ddr_reader).
+// Here the ROM fetch, not the walk, was the frame: 71% of the bridge frame in
+// sprite_tb after the one-clock pixel loop, 62% of the worst frame on the
+// board. So the walk and the drawing come apart. S_PIX walks a pixel a clock
+// and pushes {x, y, priority, colour, byte, new} into a 64-deep queue; a pixel
+// whose granule differs from the last one asked for is "new", and that
+// granule is requested as it is pushed. The drawer takes the answers in order,
+// one per new pixel, keeps the last, and writes the frame buffer. At the end
+// of the list S_WR waits for the queue and the drawer to empty; frame_start
+// flushes both, and the reader drops what was in flight.
+module ms32_sprite #(
+	parameter bit DDR = 1'b0,
+	parameter int GW  = 22             // DDR=1: granule index width (sprite region 32 MB)
+) (
 	input  logic        clk,
 	input  logic        reset,
 
@@ -85,16 +98,51 @@ module ms32_sprite (
 	// from: MAME never sets that bit in this game, so whatever is here says
 	// whether the record is a plausible sprite or corrupted object RAM.
 	output logic [15:0] first_fy_attr,
-	output logic [11:0] first_fy_idx
+	output logic [11:0] first_fy_idx,
+	// Where a frame's time goes: clocks waiting for sprite ROM data (S_ROM),
+	// for the frame buffer to take a pixel (fb_we held, fb_ready low), and for
+	// the object list (obj_ready low in S_READ). Latched at each frame_start,
+	// so a frame that overran is counted too; {max, last} of each, 24 bits.
+	output logic [143:0] dbg_wait,
+
+	// DDR=1: requests to and answers from ms32_ddr_reader, and its flush
+	output logic          rq_valid,
+	output logic [GW-1:0] rq_gran,
+	input  logic          rq_ready,
+	input  logic          rs_valid,
+	input  logic [63:0]   rs_data,
+	output logic          rs_pop,
+	output logic          flush
 );
 
-	typedef enum logic [3:0] {S_IDLE, S_READ, S_SETUP, S_MUL, S_CLIP, S_ROW, S_PIX, S_ROM, S_WR, S_NEXT} state_t;
+	typedef enum logic [3:0] {S_IDLE, S_READ, S_SETUP, S_MUL, S_CLIP, S_ROW, S_PIX, S_ROM, S_WR, S_NEXT} state_t;   // S_WR: DDR=1's end-of-frame drain
 	state_t state;
 
 	logic [11:0] idx;                 // sprite slot
 	logic [3:0]  rd_cnt;
 	logic [15:0] w [0:7];
 	logic [23:0] cyc;
+	logic [23:0] w_rom, w_fb, w_obj, l_rom, l_fb, l_obj, m_rom, m_fb, m_obj;
+	assign dbg_wait = {m_obj, m_fb, m_rom, l_obj, l_fb, l_rom};
+	function automatic logic [23:0] sat24(input logic [23:0] v, input logic e);
+		sat24 = (e && v != 24'hFFFFFF) ? v + 24'd1 : v;
+	endfunction
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			w_rom <= '0; w_fb <= '0; w_obj <= '0; l_rom <= '0; l_fb <= '0; l_obj <= '0;
+			m_rom <= '0; m_fb <= '0; m_obj <= '0;
+		end else if (frame_start) begin
+			l_rom <= w_rom; l_fb <= w_fb; l_obj <= w_obj;
+			if (w_rom > m_rom) m_rom <= w_rom;
+			if (w_fb  > m_fb)  m_fb  <= w_fb;
+			if (w_obj > m_obj) m_obj <= w_obj;
+			w_rom <= '0; w_fb <= '0; w_obj <= '0;
+		end else begin
+			w_rom <= sat24(w_rom, (state == S_ROM && !rom_valid) || (DDR && d_head && !d_have));
+			w_fb  <= sat24(w_fb,  fb_we && !fb_ready);
+			w_obj <= sat24(w_obj, state == S_READ && !obj_ready);
+		end
+	end
 	logic [12:0] drawn, n_flipx, n_flipy;
 	logic [15:0] fy_attr;
 	logic [11:0] fy_idx;
@@ -134,7 +182,6 @@ module ms32_sprite (
 	logic        last_valid;
 	logic [27:0] last_gaddr;
 	logic [63:0] last_data;
-	logic [7:0]  pen;
 	logic        rom_req_r;
 	// left/top clip: srcx = -destx * incx as a shift-add over the 11 bits of
 	// -destx (WORKFLOW "No multiplies, no divides"); only clipped sprites pay
@@ -158,28 +205,103 @@ module ms32_sprite (
 	wire [16:0] pxstart = srcstartx + (flipx ? (srcendx - srcx[16:0] - 17'd1) : srcx[16:0]);
 	wire [16:0] pxnext  = flipx ? (pxabs - {1'b0, incx}) : (pxabs + {1'b0, incx});
 	wire [27:0] gaddr = {page, drawy[7:3], drawx[7:3], drawy[2:0], 3'b000};
+	// the pixel S_PIX is looking at this clock: its granule, and its pen if
+	// that granule is the one held
+	wire [27:0] gaddr_now = {page, drawy[7:3], pxabs[15:11], drawy[2:0], 3'b000};
+	wire        hit_now   = last_valid && (last_gaddr == gaddr_now);
+	wire [7:0]  pen_now   = last_data[8 * pxabs[10:8] +: 8];
 
-	// A row is in progress from S_ROW's start until S_PIX decides it is done;
-	// S_NEXT is reached with row_active set only from S_WR/S_ROM.
-	logic row_active;
+	// the frame buffer port: the walk's own (DDR=0) or the drawer's (DDR=1)
+	logic        m_fb_we;
+	logic [8:0]  m_fb_x;
+	logic [7:0]  m_fb_y;
+	logic [15:0] m_fb_data;
+	logic        d_fb_we;
+	logic [8:0]  d_fb_x;
+	logic [7:0]  d_fb_y;
+	logic [15:0] d_fb_data;
+	assign fb_we   = DDR ? d_fb_we   : m_fb_we;
+	assign fb_x    = DDR ? d_fb_x    : m_fb_x;
+	assign fb_y    = DDR ? d_fb_y    : m_fb_y;
+	assign fb_data = DDR ? d_fb_data : m_fb_data;
+
+	// ---------------------------------------------- DDR=1: the pixel queue
+	localparam int QL = 6;
+	localparam int QD = 1 << QL;
+	localparam int QW = 9 + 8 + 4 + 4 + 3 + 1;      // {x, y, pri, colour, byte, new}
+	(* ramstyle = "MLAB, no_rw_check" *) logic [QW-1:0] q_mem [0:QD-1];
+	logic [QW-1:0] q_in;
+	logic          q_push;
+	logic [QL-1:0] q_wr, q_rd;
+	logic [QL:0]   q_level;
+	// the walk tests this before a push that lands the clock after, and the
+	// push before it may still be landing
+	wire           q_full = (q_level >= QD[QL:0] - 2'd2);
+	always_ff @(posedge clk) if (q_push) q_mem[q_wr] <= q_in;
+	wire  [QW-1:0] q_head  = q_mem[q_rd];
+	wire  [8:0]    hq_x    = q_head[QW-1 -: 9];
+	wire  [7:0]    hq_y    = q_head[19:12];
+	wire  [7:0]    hq_pc   = q_head[11:4];         // {pri, colour}
+	wire  [2:0]    hq_byte = q_head[3:1];
+	wire           hq_new  = q_head[0];
+
+	// the granule last asked for
+	logic        lr_valid;
+	logic [27:0] lr_gaddr;
+	wire         p_new  = !lr_valid || (lr_gaddr != gaddr_now);
+	wire         p_wait = q_full || (p_new && !rq_ready);
+
+	// ---------------------------------------------- DDR=1: the drawer
+	logic [63:0] d_hold;
+	wire         d_head = (q_level != 0);
+	wire         d_have = !hq_new || rs_valid;
+	wire [63:0]  d_src  = hq_new ? rs_data : d_hold;
+	wire [7:0]   d_pen  = d_src[8 * hq_byte +: 8];
+	wire         d_free = !d_fb_we || fb_ready;
+	wire         d_pop  = DDR && d_head && d_have && d_free;
+	assign rs_pop = d_pop && hq_new;
 	always_ff @(posedge clk) begin
-		if (reset || frame_start)   row_active <= 1'b0;
-		else if (state == S_WR)     row_active <= 1'b1;
-		else if (state == S_PIX || state == S_ROW || state == S_SETUP || state == S_CLIP) row_active <= 1'b0;
+		if (reset || frame_start) begin
+			q_wr <= '0; q_rd <= '0; q_level <= '0; d_fb_we <= 1'b0;
+		end else begin
+			if (d_fb_we && fb_ready) d_fb_we <= 1'b0;
+			if (d_pop) begin
+				q_rd <= q_rd + 1'b1;
+				if (hq_new) d_hold <= rs_data;
+				if (d_pen != 8'd0) begin
+					d_fb_we   <= 1'b1;
+					d_fb_x    <= hq_x;
+					d_fb_y    <= hq_y;
+					d_fb_data <= {hq_pc, d_pen};
+				end
+			end
+			if (q_push) q_wr <= q_wr + 1'b1;
+			q_level <= q_level + {{QL{1'b0}}, q_push} - {{QL{1'b0}}, d_pop};
+		end
 	end
+	// the drawer is done when the queue is empty, nothing is landing in it and
+	// its last write has gone
+	wire d_idle = (q_level == 0) && !q_push && !d_fb_we;
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			state         <= S_IDLE;
 			rom_req_r     <= 1'b0;
-			fb_we         <= 1'b0;
+			m_fb_we       <= 1'b0;
 			frame_done    <= 1'b0;
+			q_push        <= 1'b0;
+			rq_valid      <= 1'b0;
+			flush         <= 1'b0;
+			lr_valid      <= 1'b0;
 			frame_overrun <= 1'b0;
 			last_valid    <= 1'b0;
 			cyc           <= 24'd0;
 		end else begin
 			frame_done <= 1'b0;
-			if (fb_we && fb_ready) fb_we <= 1'b0;
+			q_push     <= 1'b0;
+			rq_valid   <= 1'b0;
+			flush      <= 1'b0;
+			if (m_fb_we && fb_ready) m_fb_we <= 1'b0;
 			cyc <= cyc + 24'd1;
 
 			if (frame_start) begin
@@ -189,8 +311,10 @@ module ms32_sprite (
 				cyc    <= 24'd0;
 				drawn  <= 13'd0; n_flipx <= 13'd0; n_flipy <= 13'd0;
 				fy_seen <= 1'b0; fy_attr <= 16'd0; fy_idx <= 12'd0;
-				fb_we  <= 1'b0;
+				m_fb_we <= 1'b0;
 				rom_req_r <= 1'b0;
+				flush   <= DDR;                              // ms32_ddr_reader drops the last frame's
+				lr_valid <= 1'b0;
 				state  <= S_READ;
 			end else begin
 				unique case (state)
@@ -263,6 +387,13 @@ module ms32_sprite (
 						end
 					end
 
+					// One clock a pixel while its granule is the one held: the
+					// pen is written (once the frame buffer has taken the last
+					// one) and the walk steps on in the same clock. A pixel in
+					// another granule asks the ROM; S_ROM comes back here with
+					// it held, and the pixel then goes out as a hit. (Three
+					// clocks a pixel before, through S_WR and S_NEXT: 41% of
+					// the attract's bridge frame in sprite_tb.)
 					S_PIX: begin
 						if (drawy[8] || curx >= hdisplay || cursrcx >= {1'b0, srcendx}) begin
 							// row done
@@ -273,18 +404,36 @@ module ms32_sprite (
 							curx    <= curx + 12'd1;
 							cursrcx <= cursrcx + {2'd0, incx};
 							pxabs   <= pxnext;
+						end else if (DDR) begin
+							// push the pixel for the drawer, and its granule if new
+							if (!p_wait) begin
+								q_push <= 1'b1;
+								q_in   <= {curx[8:0], cury[7:0], pri, colour, pxabs[10:8], p_new};
+								if (p_new) begin
+									rq_valid <= 1'b1;
+									rq_gran  <= gaddr_now[GW+2:3];
+									lr_valid <= 1'b1;
+									lr_gaddr <= gaddr_now;
+								end
+								curx    <= curx + 12'd1;
+								cursrcx <= cursrcx + {2'd0, incx};
+								pxabs   <= pxnext;
+							end
+						end else if (hit_now) begin
+							if (!m_fb_we || fb_ready) begin
+								if (pen_now != 8'd0) begin
+									m_fb_we   <= 1'b1;
+									m_fb_x    <= curx[8:0];
+									m_fb_y    <= cury[7:0];
+									m_fb_data <= {pri, colour, pen_now};
+								end
+								curx    <= curx + 12'd1;
+								cursrcx <= cursrcx + {2'd0, incx};
+								pxabs   <= pxnext;
+							end
 						end else begin
-							drawx <= pxabs[16:8];
-							state <= S_WR;      // S_WR decides between the kept granule and a fetch
-						end
-					end
-
-					S_WR: begin
-						if (last_valid && last_gaddr == gaddr) begin
-							pen <= last_data[8 * drawx[2:0] +: 8];
-							state <= S_NEXT;    // S_NEXT with busy row: write and advance (see below)
-						end else begin
-							rom_addr  <= gaddr;
+							drawx     <= pxabs[16:8];
+							rom_addr  <= gaddr_now;
 							rom_req_r <= 1'b1;
 							state     <= S_ROM;
 						end
@@ -295,29 +444,15 @@ module ms32_sprite (
 						last_valid <= 1'b1;
 						last_gaddr <= gaddr;
 						last_data  <= rom_data;
-						pen        <= rom_data[8 * drawx[2:0] +: 8];
-						state      <= S_NEXT;
+						state      <= S_PIX;
 					end
 
-					// Two jobs, told apart by whether a row is in progress
-					// (drawx valid): emit the pixel and advance, or move to
-					// the next sprite.
+					// the next sprite, or the end of the list
 					S_NEXT: begin
-						if (row_active) begin
-							if (!fb_we || fb_ready) begin
-								if (pen != 8'd0) begin
-									fb_we   <= 1'b1;
-									fb_x    <= curx[8:0];
-									fb_y    <= cury[7:0];
-									fb_data <= {pri, colour, pen};
-								end
-								curx    <= curx + 12'd1;
-								cursrcx <= cursrcx + {2'd0, incx};
-								pxabs   <= pxnext;
-								state   <= S_PIX;
-							end
-						end else begin
-							if ((reverse && idx == 12'd4095) || (!reverse && idx == 12'd0)) begin
+						begin
+							if (DDR && ((reverse && idx == 12'd4095) || (!reverse && idx == 12'd0))) begin
+								state <= S_WR;                  // the drawer still has the queue to draw
+							end else if ((reverse && idx == 12'd4095) || (!reverse && idx == 12'd0)) begin
 								frame_cycles  <= cyc;
 								sprites_drawn <= drawn;
 								drawn_flipx   <= n_flipx;
@@ -332,6 +467,18 @@ module ms32_sprite (
 								state  <= S_READ;
 							end
 						end
+					end
+
+					// DDR=1: the walk is done; the frame is when the drawer is
+					S_WR: if (d_idle) begin
+						frame_cycles  <= cyc;
+						sprites_drawn <= drawn;
+						drawn_flipx   <= n_flipx;
+						drawn_flipy   <= n_flipy;
+						first_fy_attr <= fy_attr;
+						first_fy_idx  <= fy_idx;
+						frame_done    <= 1'b1;
+						state         <= S_IDLE;
 					end
 
 					default: state <= S_IDLE;

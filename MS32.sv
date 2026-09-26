@@ -369,22 +369,13 @@ wire  [7:0] z80_data;
 wire        prg_req, tx_req, bg_req, roz_req, spr_req, gfx5_req, gfx5_valid;
 wire [23:0] gfx5_addr;
 wire [63:0] gfx5_data;
-// F-1 Super Battle's road textures come from DDR3 (ms32_gfx5_ddr, a client
+// F-1 Super Battle's road textures come from DDR3 (ms32_ddr_reader, a client
 // of ms32_ddram_mux), not the SDRAM; held off while the ROM loader owns DDR3
 wire        g_rd, g_ack, g_dout_ready;
 wire [28:0] g_addr;
 wire [15:0] dbg_road_over, dbg_fpu_runs, dbg_road_vw, dbg_road_lw, dbg_road_lines, dbg_road_pens;
-wire [12:0] dbg_spr_flipx, dbg_spr_flipy, dbg_spr_drawn;
-wire [15:0] dbg_fy_attr;
-wire [11:0] dbg_fy_idx;
-wire [9:0]  dbg_road_row;
-wire [15:0] dbg_road_rowword, dbg_road_starty, dbg_road_offsy;
+wire [12:0] dbg_spr_drawn;
 wire [19:0] dbg_fpu_max;
-wire [127:0] dbg_fpu_cnt;
-wire [63:0]  dbg_pass;
-wire [15:0]  dbg_fpu_ovl;
-wire [15:0]  dbg_chains;
-wire [31:0]  dbg_pre;
 wire [17:0] prg_addr;
 wire [23:0] tx_addr, bg_addr, roz_addr;
 wire [27:0] spr_addr;
@@ -396,6 +387,7 @@ wire        dbg_dl_req, dbg_dl_busy, dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz;
 wire        dbg_spr_ovr_ev, dbg_fb_ovr_ev, dbg_roz_ovr_ev, dbg_road_ovr_ev, dbg_copy_done, core_vblank_ev;
 wire        road_ovr;
 wire [23:0] dbg_spr_cycles;
+wire [143:0] dbg_spr_wait;
 wire [15:0] dbg_ymf_wait_max, dbg_if_wait_max, dbg_ymf_overrun;
 
 // FAST ROM LOAD. The .mra's <rom index="0" address="0x30000000"> makes the HPS
@@ -538,12 +530,9 @@ ms32_core u_core (
 	.gfx5_req(gfx5_req), .gfx5_addr(gfx5_addr), .gfx5_valid(gfx5_valid), .gfx5_data(gfx5_data),
 	.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(c_dout), .g_dout_ready(g_dout_ready),
 	.dbg_road_over(dbg_road_over), .dbg_road_vw(dbg_road_vw), .dbg_road_lw(dbg_road_lw), .dbg_road_lines(dbg_road_lines),
-	.dbg_road_pens(dbg_road_pens), .dbg_spr_flipx(dbg_spr_flipx), .dbg_spr_flipy(dbg_spr_flipy),
-	.dbg_spr_drawn(dbg_spr_drawn), .dbg_fy_attr(dbg_fy_attr), .dbg_fy_idx(dbg_fy_idx),
-	.dbg_road_row(dbg_road_row), .dbg_road_rowword(dbg_road_rowword),
-	.dbg_road_starty(dbg_road_starty), .dbg_road_offsy(dbg_road_offsy),
+	.dbg_road_pens(dbg_road_pens), .dbg_spr_drawn(dbg_spr_drawn),
 	.dbg_mem_en(dbg_mem_en), .dbg_mem_reg(dbg_mem_reg), .dbg_mem_addr(dbg_mem_addr), .dbg_mem_data(dbg_mem_data),
-	.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs), .dbg_fpu_cnt(dbg_fpu_cnt), .dbg_pass(dbg_pass), .dbg_fpu_ovl(dbg_fpu_ovl), .dbg_chains(dbg_chains), .dbg_pre(dbg_pre),
+	.dbg_fpu_max(dbg_fpu_max), .dbg_fpu_runs(dbg_fpu_runs),
 	.nv_addr(ioctl_addr[12:0]), .nv_rdata(nv_rdata), .nv_written(nv_written),
 	.snd_reset(snd_reset), .snd_cmd_we(snd_cmd_we), .snd_cmd_data(snd_cmd_data),
 	.snd_tomain_we(snd_tomain_we), .snd_tomain_data(snd_tomain_data),
@@ -562,7 +551,7 @@ ms32_core u_core (
 	.dis_tx(status[81]), .dis_bg(status[82]), .dis_roz(status[83]), .dis_spr(status[84]), .dis_road(status[85]),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .road_overrun(road_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.dbg_roz_fill(dbg_roz_fill), .dbg_roz_hit(dbg_roz_hit), .dbg_roz_pen_nz(dbg_roz_pen_nz),
-	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_road_ovr_ev(dbg_road_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles),
+	.dbg_spr_ovr_ev(dbg_spr_ovr_ev), .dbg_fb_ovr_ev(dbg_fb_ovr_ev), .dbg_roz_ovr_ev(dbg_roz_ovr_ev), .dbg_road_ovr_ev(dbg_road_ovr_ev), .dbg_copy_done(dbg_copy_done), .dbg_spr_cycles(dbg_spr_cycles), .dbg_spr_wait(dbg_spr_wait),
 	.dbg_pc()
 );
 
@@ -585,7 +574,7 @@ ms32_sound u_sound (
 `ifdef DEBUG_ISSP
 // A window on the video RAMs, read over JTAG by scripts/dump_ram.py: source
 // [21:0] = {dump, enable, region[3:0], address[15:0]}, probe = the 16-bit word.
-// Regions 0-7 are the video RAMs, 8 and 9 the two FPUs' data RAMs, 10 the FPU0 read log.
+// Regions 0-7 are the video RAMs.
 // scripts/render_model.py then renders the board's own RAM, which is the only
 // way to tell "the RTL is wrong" from "the RAM is wrong". While the enable is
 // held the read ports are taken over and the picture is garbage, so the game
@@ -634,30 +623,17 @@ issp_video_probe #(.INSTANCE_ID("V")) u_issp_v (
 	.road_over(dbg_road_over), .road_ovr(road_ovr), .road_ovr_ev(dbg_road_ovr_ev),
 	.fpu_max(dbg_fpu_max), .fpu_runs(dbg_fpu_runs),
 	.road_vw(dbg_road_vw), .road_lw(dbg_road_lw), .road_lines(dbg_road_lines),
-	.road_pens(dbg_road_pens), .spr_flipx(dbg_spr_flipx), .spr_flipy(dbg_spr_flipy),
-	.spr_drawn(dbg_spr_drawn), .fy_attr(dbg_fy_attr), .fy_idx(dbg_fy_idx),
-	.road_row(dbg_road_row), .road_rowword(dbg_road_rowword),
-	.road_starty(dbg_road_starty), .road_offsy(dbg_road_offsy)
+	.road_pens(dbg_road_pens), .spr_drawn(dbg_spr_drawn)
 );
-// F-1 Super Battle, per FPU, since reset (clk_cpu, wrapping; ms32_cpu_sys),
-// read with scripts/read_issp.py. A second instance: one is capped at 511 bits.
-//   [15:0] FPU0 host reads   [31:16] FPU0 host writes
-//   [47:32] FPU1 host reads  [63:48] FPU1 host writes
-//   [79:64] FPU0 irqs raised [95:80] FPU1 irqs raised
-//   [111:96] FPU0 starts     [127:112] FPU1 starts
-// and per field pass (ms32_cpu_sys dbg_pass):
-//   [135:128] lowest road line written in the last pass  [143:136] highest
-//   [159:144] road line RAM writes in the last pass
-//   [175:160] writes to FEE10000 (the main loop's idle flag)  [191:176] field events
-//   [207:192] V70 data/register writes that land while FPU0 runs a routine
-//   [223:208] FPU0 chains started (PC writes of 0x338; read log in window region 10)
-//   [239:224] hash of FPU0 writes before chain 0   [255:240] their count
+// Instance F: where the sprite engine's time goes (ms32_sprite dbg_wait),
+// clocks per frame -- [23:0] ROM, [47:24] frame buffer, [71:48] object list,
+// last frame; [143:72] the same, worst frame. Read with scripts/read_issp.py.
 altsource_probe #(
 	.sld_auto_instance_index("YES"), .instance_id("F"),
-	.probe_width(256), .source_width(1), .source_initial_value("0"),
+	.probe_width(144), .source_width(1), .source_initial_value("0"),
 	.enable_metastability("NO"), .lpm_type("altsource_probe")
 ) u_issp_f (
-	.probe({dbg_pre, dbg_chains, dbg_fpu_ovl, dbg_pass, dbg_fpu_cnt}), .source(), .source_clk(clk_sys), .source_ena(1'b1)
+	.probe(dbg_spr_wait), .source(), .source_clk(clk_sys), .source_ena(1'b1)
 );
 `else
 assign dump_req = 1'b0;

@@ -9,9 +9,7 @@
 
 Regions: 0 road map (1024), 1 road line RAM (2048), 2 road_ctrl (24),
 3 priority RAM (8192), 4 ROZ map (32768), 5 ROZ line RAM (2048),
-6 TX map (8192), 7 palette (32768), 8 FPU0 data RAM (2304), 9 FPU1 data RAM
-(2304). The FPU regions take over the FPU's host read port while armed, so
-there too the game should be paused.
+6 TX map (8192), 7 palette (32768).
 
 The window takes over the RAMs' read ports while it is armed, so the picture
 is garbage during a dump and the game should be paused first. Object RAM is
@@ -32,11 +30,10 @@ sys.path.insert(0, str(REPO / "scripts"))
 from hwlock import jtag_session  # noqa: E402
 
 QUARTUS_STP = Path(r"C:\intelFPGA_lite\17.0\quartus\bin64\quartus_stp.exe")
-SIZES = {0: 1024, 1: 2048, 2: 24, 3: 8192, 4: 32768, 5: 2048, 6: 8192, 7: 32768, 8: 2304, 9: 2304, 10: 1024}
+SIZES = {0: 1024, 1: 2048, 2: 24, 3: 8192, 4: 32768, 5: 2048, 6: 8192, 7: 32768}
 NAMES = {0: "roadvram", 1: "roadline", 2: "roadctrl", 3: "priram",
-         4: "rozram", 5: "lineram", 6: "txram", 7: "palram", 8: "fpu0data", 9: "fpu1data",
-         10: "fpu0reads"}  # 10: FPU0 read log from chain 0, word 2k data, 2k+1 dword index (ms32_cpu_sys)
-DUMPED = range(8)   # what the .nvm dump carries (MS32.sv); the FPU RAMs are JTAG-only
+         4: "rozram", 5: "lineram", 6: "txram", 7: "palram"}
+DUMPED = range(8)   # what the .nvm dump carries (MS32.sv)
 
 
 def dump(region, count, out):

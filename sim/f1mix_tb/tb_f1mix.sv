@@ -12,7 +12,7 @@
 //      python scripts/render_model.py f1superb-road2 --layer all
 //      python scripts/run_verilator.py f1mix_tb +CAP=f1superb-road2 +LAT=12
 //
-//  The road plane reads gfx5 as the core does, through ms32_gfx5_ddr from a
+//  The road plane reads gfx5 as the core does, through ms32_ddr_reader from a
 //  DDR3 model: reads accepted one a clock unless busy, answered in order
 //  DLAT clocks later. +DLAT=<n> (default 60), +DDRBUSY=1 makes the port busy
 //  on a random quarter of the clocks.
@@ -128,7 +128,7 @@ ms32_lineplane #(.WRAP(1'b1), .DDR(1'b1)) u_road (
 wire        g_rd, g_ack, g_dout_ready;
 wire [28:0] g_addr;
 wire [63:0] g_dout;
-ms32_gfx5_ddr u_gfx5 (
+ms32_ddr_reader #(.BASE(28'h0E80000), .GW(20)) u_gfx5 (
 	.clk(clk), .reset(reset), .flush(g_flush),
 	.rq_valid(g_rq_valid), .rq_gran(g_rq_gran), .rq_ready(g_rq_ready),
 	.rs_valid(g_rs_valid), .rs_data(g_rs_data), .rs_pop(g_rs_pop),

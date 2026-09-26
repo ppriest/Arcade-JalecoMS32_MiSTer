@@ -26,11 +26,7 @@
 //   [267:252] road map writes   [283:268] road line RAM writes (clk_cpu, saturating)
 //   [299:284] road lines the plane drew in the last frame (0 = every line blank)
 //   [315:300] non-zero road pens written in the last frame (0 = the ROM gives nothing)
-//   [328:316] sprites drawn with flipx   [341:329] with flipy, last frame
-//   [354:342] sprites drawn, last frame
-//   [370:355] the first flipy sprite's attribute word   [382:371] its slot
-//   [392:383] the row the road plane last selected  [408:393] what vram[2 row] gave
-//   [424:409] road_ctrl[2] (starty)   [440:425] road_ctrl[13] (offsy)
+//   [328:316] sprites drawn, last frame
 //
 // Removed once they had answered their question rather than carried: the reset
 // counts and lengths (c524b91, for whether the board's OSD Reset reaches the
@@ -61,15 +57,7 @@ module issp_video_probe #(
 	input logic [15:0] road_lw,
 	input logic [15:0] road_lines,
 	input logic [15:0] road_pens,
-	input logic [12:0] spr_flipx,
-	input logic [12:0] spr_flipy,
-	input logic [12:0] spr_drawn,
-	input logic [15:0] fy_attr,
-	input logic [11:0] fy_idx,
-	input logic [9:0]  road_row,
-	input logic [15:0] road_rowword,
-	input logic [15:0] road_starty,
-	input logic [15:0] road_offsy
+	input logic [12:0] spr_drawn
 );
 
 	logic [15:0] c_spr, c_fb, c_roz, c_road, c_frames, roz_last;
@@ -97,14 +85,14 @@ module issp_video_probe #(
 		end
 	end
 
-	wire [440:0] probe_bus = {road_offsy, road_starty, road_rowword, road_row, fy_idx, fy_attr, spr_drawn, spr_flipy, spr_flipx, road_pens, road_lines, road_lw, road_vw, fpu_runs, fpu_max, c_road, road_ovr, road_over, if_wait_max, ymf_wait_max, ymf_overrun, roz_last, c_frames, max_copy, max_spr, c_roz, c_fb, c_spr, flags};
+	wire [328:0] probe_bus = {spr_drawn, road_pens, road_lines, road_lw, road_vw, fpu_runs, fpu_max, c_road, road_ovr, road_over, if_wait_max, ymf_wait_max, ymf_overrun, roz_last, c_frames, max_copy, max_spr, c_roz, c_fb, c_spr, flags};
 	wire [0:0]   source_bus;
 	assign clear = source_bus[0];
 
 	altsource_probe #(
 		.sld_auto_instance_index("YES"),
 		.instance_id(INSTANCE_ID),
-		.probe_width(441),
+		.probe_width(329),
 		.source_width(1),
 		.source_initial_value("0"),
 		.enable_metastability("NO"),

@@ -54,17 +54,17 @@ if {$npoll > 0} {
         set ii [lindex $inst 0]
         if {[lindex $inst 3] ne "V"} { continue }
         set p [read_probe_data -instance_index $ii]
-        if {[string length $p] != 441} {
-            puts "WIDTH MISMATCH: instance V is [string length $p] bits, this tree'srtl/debug expects 441. Refusing to poll -- the board is running a different build."
+        if {[string length $p] != 329} {
+            puts "WIDTH MISMATCH: instance V is [string length $p] bits, this tree'srtl/debug expects 329. Refusing to poll -- the board is running a different build."
             end_insystem_source_probe
             exit 1
         }
-        puts "sample frames roadlines roadpens sprdrawn | fpu0: starts irqs reads writes | fpu1: starts irqs reads writes | pass: lines min-max writes | flagwr fields | fpu0 writes while busy"
+        puts "sample frames roadlines roadpens sprdrawn | sprite waits last frame: rom fb obj"
         for {set k 0} {$k < $npoll} {incr k} {
             set p [read_probe_data -instance_index $ii]
             # not through expr: it would read the bit string as a number
-            if {$fi >= 0} { set f [read_probe_data -instance_index $fi] } else { set f [string repeat 0 256] }
-            puts [format "%d %d %d %d %d | %d %d %d %d | %d %d %d %d | %d-%d %d | %d %d | %d" $k                 [bits_to_int $p 103 118] [bits_to_int $p 284 299] [bits_to_int $p 300 315]                 [bits_to_int $p 342 354]                 [bits_to_int $f 96 111] [bits_to_int $f 64 79] [bits_to_int $f 0 15] [bits_to_int $f 16 31]                 [bits_to_int $f 112 127] [bits_to_int $f 80 95] [bits_to_int $f 32 47] [bits_to_int $f 48 63]                 [bits_to_int $f 128 135] [bits_to_int $f 136 143] [bits_to_int $f 144 159] [bits_to_int $f 160 175] [bits_to_int $f 176 191] [bits_to_int $f 192 207]]
+            if {$fi >= 0} { set f [read_probe_data -instance_index $fi] } else { set f [string repeat 0 144] }
+            puts [format "%d %d %d %d %d | %d %d %d" $k [bits_to_int $p 103 118] [bits_to_int $p 284 299] [bits_to_int $p 300 315] [bits_to_int $p 316 328] [bits_to_int $f 0 23] [bits_to_int $f 24 47] [bits_to_int $f 48 71]]
             after 700
         }
     }
@@ -86,7 +86,7 @@ foreach inst $insts {
     # running an older bitstream decodes into plausible nonsense unless the
     # width is checked -- that has already happened once here.
     set want 0
-    if {$iid eq "M"} { set want 132 } elseif {$iid eq "V"} { set want 441 } elseif {$iid eq "F"} { set want 256 }
+    if {$iid eq "M"} { set want 132 } elseif {$iid eq "V"} { set want 329 } elseif {$iid eq "F"} { set want 144 }
     if {$want && [string length $p] != $want} {
         puts "WIDTH MISMATCH: instance $iid is [string length $p] bits, this tree'srtl/debug expects $want. The board is running a different build; the numbersbelow would be nonsense, so they are not printed. Deploy this tree's bitstream,or read it with \"raw\" and decode against that build's own header."
         continue
@@ -131,18 +131,11 @@ foreach inst $insts {
         puts [format "road line RAM writes      : %d" [bits_to_int $p 268 283]]
         puts [format "road lines drawn, last fr : %d" [bits_to_int $p 284 299]]
         puts [format "road pens non-zero, last  : %d" [bits_to_int $p 300 315]]
-        puts [format "sprites drawn / fx / fy   : %d / %d / %d" [bits_to_int $p 342 354] [bits_to_int $p 316 328] [bits_to_int $p 329 341]]
-        puts [format "first flipy sprite        : attr %04X at slot %d" [bits_to_int $p 355 370] [bits_to_int $p 371 382]]
-        puts [format "road row / vram\[2 row\]    : %d / %04X" [bits_to_int $p 383 392] [bits_to_int $p 393 408]]
-        puts [format "road starty / offsy       : %04X / %04X" [bits_to_int $p 409 424] [bits_to_int $p 425 440]]
+        puts [format "sprites drawn, last frame : %d" [bits_to_int $p 316 328]]
     } elseif {$iid eq "F"} {
-        puts [format "FPU0 starts/irqs/rd/wr    : %d / %d / %d / %d" [bits_to_int $p 96 111] [bits_to_int $p 64 79] [bits_to_int $p 0 15] [bits_to_int $p 16 31]]
-        puts [format "FPU1 starts/irqs/rd/wr    : %d / %d / %d / %d" [bits_to_int $p 112 127] [bits_to_int $p 80 95] [bits_to_int $p 32 47] [bits_to_int $p 48 63]]
-        puts [format "last pass road lines      : %d-%d, %d writes" [bits_to_int $p 128 135] [bits_to_int $p 136 143] [bits_to_int $p 144 159]]
-        puts [format "FEE10000 writes / fields  : %d / %d" [bits_to_int $p 160 175] [bits_to_int $p 176 191]]
-        puts [format "FPU0 writes while busy    : %d" [bits_to_int $p 192 207]]
-        puts [format "FPU0 chains started       : %d" [bits_to_int $p 208 223]]
-        puts [format "FPU0 writes before chain 0: %d, hash %04x" [bits_to_int $p 240 255] [bits_to_int $p 224 239]]
+        set fr 1638400.0
+        puts [format "sprite waits, last frame  : ROM %d (%.0f%%)  frame buffer %d (%.0f%%)  object list %d (%.0f%%)" [bits_to_int $p 0 23] [expr {100 * [bits_to_int $p 0 23] / $fr}] [bits_to_int $p 24 47] [expr {100 * [bits_to_int $p 24 47] / $fr}] [bits_to_int $p 48 71] [expr {100 * [bits_to_int $p 48 71] / $fr}]]
+        puts [format "sprite waits, worst frame : ROM %d (%.0f%%)  frame buffer %d (%.0f%%)  object list %d (%.0f%%)" [bits_to_int $p 72 95] [expr {100 * [bits_to_int $p 72 95] / $fr}] [bits_to_int $p 96 119] [expr {100 * [bits_to_int $p 96 119] / $fr}] [bits_to_int $p 120 143] [expr {100 * [bits_to_int $p 120 143] / $fr}]]
     } else {
         puts "raw: $p"
     }

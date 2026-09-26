@@ -52,16 +52,16 @@
 // SHAPE: as ms32_roz -- the same one-line-ahead double line buffer, and the
 // same overrun reporting when a line cannot be finished before it is shown.
 //
-// DDR=1 (the road, whose gfx5 is read from DDR3 through ms32_gfx5_ddr): the
+// DDR=1 (the road, whose gfx5 is read from DDR3 through ms32_ddr_reader): the
 // one-request fetcher above would pay the DDR3's latency per granule, so the
 // queue deepens to 32, in MLAB. A pixel whose granule differs from the last
 // one asked for is pushed with "new" set, and that granule is requested as it
 // is pushed; the fetcher takes the answers in order, one per "new" pixel, and
 // draws the rest from the granule it holds. How many reads are in flight is
-// ms32_gfx5_ddr's to bound; the generator waits while it has no room.
+// ms32_ddr_reader's to bound; the generator waits while it has no room.
 module ms32_lineplane #(
 	parameter bit WRAP = 1'b1,         // road: wraps; ROZ: clips
-	parameter bit DDR  = 1'b0          // road: gfx5 through ms32_gfx5_ddr
+	parameter bit DDR  = 1'b0          // road: gfx5 through ms32_ddr_reader
 ) (
 	input  logic        clk,
 	input  logic        reset,
@@ -109,7 +109,7 @@ module ms32_lineplane #(
 	output logic [9:0]  dbg_row,       // the row the last line selected
 	output logic [15:0] dbg_rowword,   // and what vram[2 row] gave back
 
-	// DDR=1: requests to and answers from ms32_gfx5_ddr, and its flush
+	// DDR=1: requests to and answers from ms32_ddr_reader, and its flush
 	output logic        rq_valid,
 	output logic [19:0] rq_gran,
 	input  logic        rq_ready,
@@ -209,7 +209,7 @@ module ms32_lineplane #(
 	wire f_fast, f_ask, f_fill;
 	wire [63:0] fill_data = DDR ? rs_data : rom_data;
 	generate if (DDR) begin : g_ddr_fetch
-		// the answer to a "new" pixel is the head of ms32_gfx5_ddr's FIFO
+		// the answer to a "new" pixel is the head of ms32_ddr_reader's FIFO
 		assign f_fast = h_ready && (h_clear || !hq_new);
 		assign f_ask  = 1'b0;
 		assign f_fill = h_ready && !h_clear && hq_new && rs_valid;
@@ -280,7 +280,7 @@ module ms32_lineplane #(
 				q_rd          <= '0;
 				q_level       <= '0;
 				lr_valid      <= 1'b0;
-				flush         <= DDR;              // ms32_gfx5_ddr drops the last line's
+				flush         <= DDR;              // ms32_ddr_reader drops the last line's
 				y             <= fetch_line_active ? vcnt_next2 : 12'd0;
 				hlast         <= hdisplay[9:0] - 10'd1;
 				lr_cnt        <= 4'd0;
@@ -348,7 +348,7 @@ module ms32_lineplane #(
 						gst    <= G_P3;
 					end
 					// vram_data is the colour word, and holds while this waits
-					// for ms32_gfx5_ddr to take a request
+					// for ms32_ddr_reader to take a request
 					G_P3: if (!p3_wait) begin
 						q_push <= 1'b1;
 						q_in   <= {p3_gran, px_r[2:0], vram_data[3:0], p3_clear, gx, p3_new};

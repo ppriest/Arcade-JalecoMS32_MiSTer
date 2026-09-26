@@ -64,7 +64,7 @@ module ms32_video (
 	output logic        bg_rom_req,  output logic [23:0] bg_rom_addr,  input logic bg_rom_valid,  input logic [63:0] bg_rom_data,
 	output logic        roz_rom_req, output logic [23:0] roz_rom_addr, input logic roz_rom_valid, input logic [63:0] roz_rom_data,
 	output logic        gfx5_rom_req, output logic [23:0] gfx5_rom_addr, input logic gfx5_rom_valid, input logic [63:0] gfx5_rom_data,
-	// F1SUPERB: gfx5 from DDR3 (ms32_gfx5_ddr), a client of ms32_ddram_mux;
+	// F1SUPERB: gfx5 from DDR3 (ms32_ddr_reader), a client of ms32_ddram_mux;
 	// the SDRAM gfx5 port above is no longer used
 	output logic        g_rd, output logic [28:0] g_addr, input logic g_ack,
 	input  logic [63:0] g_dout, input logic g_dout_ready,
@@ -99,13 +99,6 @@ module ms32_video (
 	output logic        road_overrun,                            // F1SUPERB: the road line plane
 	output logic [15:0] dbg_road_lines,                          // road lines drawn in the last frame
 	output logic [15:0] dbg_road_pens,                           // non-zero road pens in the last frame
-	output logic [12:0] dbg_spr_flipx, dbg_spr_flipy,            // flipped sprites in the last frame
-	output logic [15:0] dbg_fy_attr,                             // the first flipy sprite's attribute
-	output logic [11:0] dbg_fy_idx,                              // and the slot it came from
-	output logic [9:0]  dbg_road_row,                            // the row the road plane last selected
-	output logic [15:0] dbg_road_rowword,                        // and what vram[2 row] gave back
-	output logic [15:0] dbg_road_starty,                         // road_ctrl[2], as the CPU last set it
-	output logic [15:0] dbg_road_offsy,                          // road_ctrl[13]
 	// A window on the video RAMs, for dumping them off a running board and
 	// rendering the result with scripts/render_model.py -- the same renderer
 	// that matches MAME pixel for pixel, so it says whether the RAM is right
@@ -117,6 +110,7 @@ module ms32_video (
 	input  logic [15:0] dbg_mem_addr,
 	output logic [15:0] dbg_mem_data,
 	output logic [23:0] spr_frame_cycles,
+	output logic [143:0] dbg_spr_wait,       // ms32_sprite dbg_wait
 	output logic [12:0] spr_drawn,
 	output logic        dbg_roz_fill, dbg_roz_hit, dbg_roz_pen_nz,
 	// one clk each, for the ISSP probe: a sprite frame still drawing when the next
@@ -193,8 +187,6 @@ module ms32_video (
 	// How many of a frame's lines the road plane actually draws: vram[2 row]
 	// zero leaves a line transparent, so an all-blank road reads as 0 here and
 	// says the fault is upstream of the plane, not in it.
-	assign dbg_road_starty = road_ctrl[2];
-	assign dbg_road_offsy  = road_ctrl[13];
 
 	logic road_line_drawn, road_pen_nz;
 	logic [15:0] road_lines_n, road_pens_n;
@@ -276,6 +268,8 @@ module ms32_video (
 		.rq_valid(), .rq_gran(), .rq_ready(1'b0), .rs_valid(1'b0), .rs_data(64'd0), .rs_pop(), .flush()
 	);
 	assign roz_va = {4'd0, rozf1_va};   // the line plane's map is 1,024 rows
+	logic        rg_rd, rg_ack, rg_dout_ready;   // the road reader's DDR3 side, into ms32_ddr_g2
+	logic [28:0] rg_addr;
 	logic        rp_rq_valid, rp_rq_ready, rp_rs_valid, rp_rs_pop, rp_flush;
 	logic [19:0] rp_rq_gran;
 	logic [63:0] rp_rs_data;
@@ -292,15 +286,15 @@ module ms32_video (
 		.pen(road_pen), .colour(road_col), .opaque(road_op), .line_colour(road_line_colour),
 		.fetch_overrun(road_overrun), .overrun_ev(dbg_road_ovr_ev), .line_done(), .line_cycles(), .line_misses(),
 		.line_drawn(road_line_drawn), .pen_nz(road_pen_nz),
-		.dbg_row(dbg_road_row), .dbg_rowword(dbg_road_rowword),
+		.dbg_row(), .dbg_rowword(),
 		.rq_valid(rp_rq_valid), .rq_gran(rp_rq_gran), .rq_ready(rp_rq_ready),
 		.rs_valid(rp_rs_valid), .rs_data(rp_rs_data), .rs_pop(rp_rs_pop), .flush(rp_flush)
 	);
-	ms32_gfx5_ddr u_gfx5_ddr (
+	ms32_ddr_reader #(.BASE(28'h0E80000), .GW(20)) u_gfx5_ddr (
 		.clk(clk), .reset(reset), .flush(rp_flush),
 		.rq_valid(rp_rq_valid), .rq_gran(rp_rq_gran), .rq_ready(rp_rq_ready),
 		.rs_valid(rp_rs_valid), .rs_data(rp_rs_data), .rs_pop(rp_rs_pop),
-		.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(g_dout), .g_dout_ready(g_dout_ready)
+		.g_rd(rg_rd), .g_addr(rg_addr), .g_ack(rg_ack), .g_dout(g_dout), .g_dout_ready(rg_dout_ready)
 	);
 	assign gfx5_rom_req  = 1'b0;
 	assign gfx5_rom_addr = 24'd0;
@@ -344,7 +338,19 @@ module ms32_video (
 	logic        j_req, j_we, j_beat, j_done;
 	logic [27:3] j_addr;
 	logic [63:0] j_din, j_dout;
-	ms32_objram u_objram (
+	// F1SUPERB: the sprite ROM is read from the DDR3 image (ms32_ddr_reader),
+	// which runs to 0x3AC0000 in that map, so the object RAM copy and the
+	// frame buffer move up above it. Elsewhere they stay above the 32 MB image.
+`ifdef F1SUPERB
+	localparam bit          SPR_DDR = 1'b1;
+	localparam logic [27:3] OBJ_W   = 25'h0820000;   // byte 0x4100000
+	localparam logic [27:0] FB_BASE = 28'h4000000;
+`else
+	localparam bit          SPR_DDR = 1'b0;
+	localparam logic [27:3] OBJ_W   = 25'h0420000;   // byte 0x2100000
+	localparam logic [27:0] FB_BASE = 28'h2000000;
+`endif
+	ms32_objram #(.BASE_W(OBJ_W)) u_objram (
 		.clk(clk), .reset(reset),
 		.wq_valid(obj_wq_valid), .wq_data(obj_wq_data), .wq_pop(obj_wq_pop), .wq_level(obj_wq_level),
 		.cpu_req(obj_cpu_req), .cpu_addr(obj_cpu_addr), .cpu_valid(obj_cpu_valid), .cpu_rdata(obj_cpu_rdata),
@@ -359,17 +365,43 @@ module ms32_video (
 	logic [8:0]  fb_x;
 	logic [7:0]  fb_y;
 	logic [15:0] fb_data, spr_pix;
-	ms32_sprite u_spr (
+	logic          sp_rq_valid, sp_rq_ready, sp_rs_valid, sp_rs_pop, sp_flush;
+	logic [21:0]   sp_rq_gran;
+	logic [63:0]   sp_rs_data;
+	ms32_sprite #(.DDR(SPR_DDR), .GW(22)) u_spr (
 		.clk(clk), .reset(reset),
 		.frame_start(copy_done), .reverse(~spr_ctrl10[15]), .hdisplay(hdisplay), .vdisplay(vdisplay),
 		.obj_addr(obj_addr), .obj_data(obj_data), .obj_ready(obj_ready), .obj_rd(obj_rd),
 		.rom_req(spr_rom_req), .rom_addr(spr_rom_addr), .rom_valid(spr_rom_valid), .rom_data(spr_rom_data),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready),
 		.busy(spr_busy), .frame_done(spr_done), .frame_overrun(spr_overrun), .frame_cycles(spr_frame_cycles), .sprites_drawn(spr_drawn),
-		.drawn_flipx(dbg_spr_flipx), .drawn_flipy(dbg_spr_flipy),
-		.first_fy_attr(dbg_fy_attr), .first_fy_idx(dbg_fy_idx)
+		.drawn_flipx(), .drawn_flipy(), .first_fy_attr(), .first_fy_idx(), .dbg_wait(dbg_spr_wait),
+		.rq_valid(sp_rq_valid), .rq_gran(sp_rq_gran), .rq_ready(sp_rq_ready),
+		.rs_valid(sp_rs_valid), .rs_data(sp_rs_data), .rs_pop(sp_rs_pop), .flush(sp_flush)
 	);
-	ms32_sprite_fb u_fb (
+`ifdef F1SUPERB
+	// the sprite ROM from DDR3 (32 MB at image offset 0x1AC0000, the F-1 map's
+	// BASE_SPRITE), and the two readers onto the one g port, road first
+	logic        sg_rd, sg_ack, sg_dout_ready;
+	logic [28:0] sg_addr;
+	ms32_ddr_reader #(.BASE(28'h1AC0000), .GW(22)) u_spr_ddr (
+		.clk(clk), .reset(reset), .flush(sp_flush),
+		.rq_valid(sp_rq_valid), .rq_gran(sp_rq_gran), .rq_ready(sp_rq_ready),
+		.rs_valid(sp_rs_valid), .rs_data(sp_rs_data), .rs_pop(sp_rs_pop),
+		.g_rd(sg_rd), .g_addr(sg_addr), .g_ack(sg_ack), .g_dout(g_dout), .g_dout_ready(sg_dout_ready)
+	);
+	ms32_ddr_g2 u_g2 (
+		.clk(clk), .reset(reset),
+		.a_rd(rg_rd), .a_addr(rg_addr), .a_ack(rg_ack), .a_dout_ready(rg_dout_ready),
+		.b_rd(sg_rd), .b_addr(sg_addr), .b_ack(sg_ack), .b_dout_ready(sg_dout_ready),
+		.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout_ready(g_dout_ready)
+	);
+`else
+	assign sp_rq_ready = 1'b0;
+	assign sp_rs_valid = 1'b0;
+	assign sp_rs_data  = 64'd0;
+`endif
+	ms32_sprite_fb #(.BASE(FB_BASE)) u_fb (
 		.clk(clk), .reset(reset),
 		.frame_start(vblank_ev), .line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active),
 		.fb_we(fb_we), .fb_x(fb_x), .fb_y(fb_y), .fb_data(fb_data), .fb_ready(fb_ready), .flush(spr_done),
