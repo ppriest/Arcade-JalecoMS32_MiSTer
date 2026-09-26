@@ -37,7 +37,7 @@ from pathlib import Path
 MAME_DIR = Path(os.environ.get("MAME_DIR", r"C:\Emulation\Emulators\MAME"))
 # MAME_BIN names a build outside MAME_DIR -- the F-1 Super Battle worktree's
 # ms32.exe, say -- while the rompath and mame.ini stay MAME_DIR's
-MAME_EXE = Path(os.environ["MAME_BIN"]) if os.environ.get("MAME_BIN") else MAME_DIR / os.environ.get("MAME_EXE", "arcade64.exe")
+MAME_EXE = Path(os.environ["MAME_BIN"]) if os.environ.get("MAME_BIN") else MAME_DIR / os.environ.get("MAME_EXE", "mame.exe")
 
 
 def rompath(repo):

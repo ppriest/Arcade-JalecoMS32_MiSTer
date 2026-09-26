@@ -508,34 +508,26 @@ module ms32_cpu_sys #(
 	// to its PC starts one. Per-chain hashes of the V70's FPU0 traffic (1b0bb80)
 	// showed the writes equal to MAME's for 53 chains and the reads different
 	// from chain 0: same inputs, other answers. So now:
-	//   - the first 512 V70 reads of FPU0 from chain 0 on, {index, data} each
-	//     (JTAG window region 10: word 2k = data, 2k+1 = dword index);
-	//   - a hash and a count of every V70 write to FPU0 before chain 0 (the
-	//     program and data upload), h' = rotl1(h) ^ data ^ (index << 3).
-	// scripts/mame/fpureads.lua gives MAME's side.
+	// That read log (window region 10) found the fault -- V70 reads of FPU0
+	// returned FPU1's last answer -- and is gone, for its two RAM blocks.
+	// Kept: the chain count, and a hash and count of every V70 write to FPU0
+	// before chain 0 (the program and data upload), h' = rotl1(h) ^ data ^
+	// (index << 3); scripts/mame/fpureads.lua gives MAME's side.
 	logic [15:0] chains, hpre, npre;
-	logic [9:0]  rl_n;
-	logic [31:0] rl_mem [0:511];
 	wire [12:0] f0_x = a[14:2];
 	wire        chain_start = fpu_done && is_fpu0 && fpu_we && (a[14:0] == 15'h24C0) && (m_wdata[9:0] == 10'h338);
 	always_ff @(posedge clk_cpu) begin
 		if (rst) begin
-			chains <= '0; hpre <= '0; npre <= '0; rl_n <= '0;
+			chains <= '0; hpre <= '0; npre <= '0;
 		end else if (fpu_done && is_fpu0) begin
 			if (chain_start) chains <= chains + 16'd1;
 			if (fpu_we && chains == 16'd0 && !chain_start) begin
 				hpre <= {hpre[14:0], hpre[15]} ^ m_wdata[15:0] ^ {f0_x, 3'b000};
 				npre <= npre + 16'd1;
 			end
-			if (!fpu_we && chains != 16'd0 && !rl_n[9]) begin
-				rl_mem[rl_n[8:0]] <= {3'd0, f0_x, fpu_rdata};
-				rl_n <= rl_n + 10'd1;
-			end
 		end
 	end
-	logic [31:0] rl_q;
-	always_ff @(posedge clk_cpu) rl_q <= rl_mem[dbg_hash_raddr[9:1]];
-	assign dbg_hash_rdata = dbg_hash_raddr[0] ? rl_q[31:16] : rl_q[15:0];
+	assign dbg_hash_rdata = 16'd0;
 	assign dbg_chains = chains;
 	assign dbg_pre = {npre, hpre};
 	// host data (below 0x2400) or register (0x2400-0x24ff) writes, not the

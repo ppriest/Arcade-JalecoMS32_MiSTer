@@ -64,6 +64,10 @@ module ms32_video (
 	output logic        bg_rom_req,  output logic [23:0] bg_rom_addr,  input logic bg_rom_valid,  input logic [63:0] bg_rom_data,
 	output logic        roz_rom_req, output logic [23:0] roz_rom_addr, input logic roz_rom_valid, input logic [63:0] roz_rom_data,
 	output logic        gfx5_rom_req, output logic [23:0] gfx5_rom_addr, input logic gfx5_rom_valid, input logic [63:0] gfx5_rom_data,
+	// F1SUPERB: gfx5 from DDR3 (ms32_gfx5_ddr), a client of ms32_ddram_mux;
+	// the SDRAM gfx5 port above is no longer used
+	output logic        g_rd, output logic [28:0] g_addr, input logic g_ack,
+	input  logic [63:0] g_dout, input logic g_dout_ready,
 	output logic        spr_rom_req, output logic [27:0] spr_rom_addr, input logic spr_rom_valid, input logic [63:0] spr_rom_data,
 
 	// sprite frame buffer
@@ -268,10 +272,14 @@ module ms32_video (
 		.rom_req(roz_rom_req), .rom_addr(roz_rom_addr), .rom_valid(roz_rom_valid), .rom_data(roz_rom_data),
 		.pen(roz_pen), .colour(roz_col), .opaque(roz_op), .line_colour(roz_line_colour),
 		.fetch_overrun(roz_overrun), .overrun_ev(dbg_roz_ovr_ev),
-		.line_done(), .line_cycles(), .line_misses(), .line_drawn(), .pen_nz(), .dbg_row(), .dbg_rowword()
+		.line_done(), .line_cycles(), .line_misses(), .line_drawn(), .pen_nz(), .dbg_row(), .dbg_rowword(),
+		.rq_valid(), .rq_gran(), .rq_ready(1'b0), .rs_valid(1'b0), .rs_data(64'd0), .rs_pop(), .flush()
 	);
 	assign roz_va = {4'd0, rozf1_va};   // the line plane's map is 1,024 rows
-	ms32_lineplane #(.WRAP(1'b1)) u_roadplane (     // gfx5, wrapped
+	logic        rp_rq_valid, rp_rq_ready, rp_rs_valid, rp_rs_pop, rp_flush;
+	logic [19:0] rp_rq_gran;
+	logic [63:0] rp_rs_data;
+	ms32_lineplane #(.WRAP(1'b1), .DDR(1'b1)) u_roadplane (     // gfx5, wrapped, from DDR3
 		.clk(clk), .reset(reset),
 		.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
 		.startx({road_ctrl[1][1:0], road_ctrl[0]}), .starty({road_ctrl[3][1:0], road_ctrl[2]}),
@@ -280,12 +288,22 @@ module ms32_video (
 		.offsx(road_ctrl[12]), .offsy(road_ctrl[13]), .offsx_hi(road_ctrl[14][0]), .offsy_hi(road_ctrl[15][0]),
 		.line_addr(road_la), .line_data(road_ld),
 		.vram_addr(road_va), .vram_data(road_vd),
-		.rom_req(gfx5_rom_req), .rom_addr(gfx5_rom_addr), .rom_valid(gfx5_rom_valid), .rom_data(gfx5_rom_data),
+		.rom_req(), .rom_addr(), .rom_valid(1'b0), .rom_data(64'd0),
 		.pen(road_pen), .colour(road_col), .opaque(road_op), .line_colour(road_line_colour),
 		.fetch_overrun(road_overrun), .overrun_ev(dbg_road_ovr_ev), .line_done(), .line_cycles(), .line_misses(),
 		.line_drawn(road_line_drawn), .pen_nz(road_pen_nz),
-		.dbg_row(dbg_road_row), .dbg_rowword(dbg_road_rowword)
+		.dbg_row(dbg_road_row), .dbg_rowword(dbg_road_rowword),
+		.rq_valid(rp_rq_valid), .rq_gran(rp_rq_gran), .rq_ready(rp_rq_ready),
+		.rs_valid(rp_rs_valid), .rs_data(rp_rs_data), .rs_pop(rp_rs_pop), .flush(rp_flush)
 	);
+	ms32_gfx5_ddr u_gfx5_ddr (
+		.clk(clk), .reset(reset), .flush(rp_flush),
+		.rq_valid(rp_rq_valid), .rq_gran(rp_rq_gran), .rq_ready(rp_rq_ready),
+		.rs_valid(rp_rs_valid), .rs_data(rp_rs_data), .rs_pop(rp_rs_pop),
+		.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(g_dout), .g_dout_ready(g_dout_ready)
+	);
+	assign gfx5_rom_req  = 1'b0;
+	assign gfx5_rom_addr = 24'd0;
 `else
 	assign road_overrun = 1'b0;
 	assign dbg_road_ovr_ev = 1'b0;
@@ -298,6 +316,8 @@ module ms32_video (
 	assign road_la = 11'd0;
 	assign gfx5_rom_req = 1'b0;
 	assign gfx5_rom_addr = 24'd0;
+	assign g_rd   = 1'b0;
+	assign g_addr = 29'd0;
 	ms32_roz u_roz (
 		.clk(clk), .reset(reset),
 		.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),

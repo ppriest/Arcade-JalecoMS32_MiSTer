@@ -89,6 +89,7 @@ ms32_video u_video (
 	.ce_pix(ce_pix), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .r(r), .g(g), .b(b),
 	.vblank_ev(vblank_ev), .field_ev(), .timer_enable(),
 	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0), .dis_road(1'b0),
+	.g_rd(), .g_addr(), .g_ack(1'b0), .g_dout(64'd0), .g_dout_ready(1'b0),
 	.dbg_mem_en(1'b0), .dbg_mem_reg(3'd0), .dbg_mem_addr(16'd0), .dbg_mem_data(),
 	.tx_overrun(tx_ovr), .bg_overrun(bg_ovr), .roz_overrun(roz_ovr), .spr_overrun(spr_ovr), .fb_overrun(fb_ovr), .bad_primask(bad_pm),
 	.spr_frame_cycles(spr_cycles), .spr_drawn(spr_drawn)

@@ -49,6 +49,8 @@ module ms32_core (
 	output logic        bg_req,   output logic [23:0] bg_addr,  input logic bg_valid,  input logic [63:0] bg_data,
 	output logic        roz_req,  output logic [23:0] roz_addr, input logic roz_valid, input logic [63:0] roz_data,
 	output logic        gfx5_req, output logic [23:0] gfx5_addr, input logic gfx5_valid, input logic [63:0] gfx5_data,
+	output logic        g_rd, output logic [28:0] g_addr, input logic g_ack,    // F1SUPERB: gfx5 from DDR3
+	input  logic [63:0] g_dout, input logic g_dout_ready,
 	output logic        spr_req,  output logic [27:0] spr_addr, input logic spr_valid, input logic [63:0] spr_data,
 	// object RAM in SDRAM (ms32_objram)
 	output logic        obj_rreq, output logic [12:0] obj_raddr, input logic obj_rvalid, input logic [63:0] obj_rdata,
@@ -184,6 +186,7 @@ module ms32_core (
 		.bg_rom_req(bg_req),   .bg_rom_addr(bg_addr),   .bg_rom_valid(bg_valid),   .bg_rom_data(bg_data),
 		.roz_rom_req(roz_req), .roz_rom_addr(roz_addr), .roz_rom_valid(roz_valid), .roz_rom_data(roz_data),
 		.gfx5_rom_req(gfx5_req), .gfx5_rom_addr(gfx5_addr), .gfx5_rom_valid(gfx5_valid), .gfx5_rom_data(gfx5_data),
+		.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(g_dout), .g_dout_ready(g_dout_ready),
 		.spr_rom_req(spr_req), .spr_rom_addr(spr_addr), .spr_rom_valid(spr_valid), .spr_rom_data(spr_data),
 		.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 		.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),

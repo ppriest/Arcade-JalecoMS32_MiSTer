@@ -11,6 +11,11 @@
 //
 //      python scripts/render_model.py f1superb-road2 --layer all
 //      python scripts/run_verilator.py f1mix_tb +CAP=f1superb-road2 +LAT=12
+//
+//  The road plane reads gfx5 as the core does, through ms32_gfx5_ddr from a
+//  DDR3 model: reads accepted one a clock unless busy, answered in order
+//  DLAT clocks later. +DLAT=<n> (default 60), +DDRBUSY=1 makes the port busy
+//  on a random quarter of the clocks.
 //      python scripts/compare_sim_rgb.py f1superb-road2 simout/f1-mix/sim_rgb.txt
 `timescale 1ns/1ps
 
@@ -100,7 +105,12 @@ ms32_tilemap #(.TILE_16(1'b1)) u_bg (
 	.rom_req(bg_req), .rom_addr(bg_addr), .rom_valid(bg_valid), .rom_data(bg_data),
 	.pen(bg_pen), .colour(bg_col), .opaque(bg_op), .fetch_overrun(), .overrun_ev()
 );
-ms32_lineplane #(.WRAP(1'b1)) u_road (
+wire        rd_ovr;
+integer     i;
+wire        g_rq_valid, g_rq_ready, g_rs_valid, g_rs_pop, g_flush;
+wire [19:0] g_rq_gran;
+wire [63:0] g_rs_data;
+ms32_lineplane #(.WRAP(1'b1), .DDR(1'b1)) u_road (
 	.clk(clk), .reset(reset),
 	.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
 	.startx({roadctrl[1][1:0], roadctrl[0][15:0]}), .starty({roadctrl[3][1:0], roadctrl[2][15:0]}),
@@ -109,8 +119,47 @@ ms32_lineplane #(.WRAP(1'b1)) u_road (
 	.line_addr(rd_la), .line_data(rd_ld), .vram_addr(rd_va), .vram_data(rd_vd),
 	.rom_req(rd_req), .rom_addr(rd_addr), .rom_valid(rd_valid), .rom_data(rd_data),
 	.pen(rd_pen), .colour(rd_col), .opaque(rd_op), .line_colour(rd_lcol),
-	.fetch_overrun(), .overrun_ev(), .line_done(), .line_cycles(), .line_misses()
+	.fetch_overrun(rd_ovr), .overrun_ev(), .line_done(), .line_cycles(), .line_misses(),
+	.rq_valid(g_rq_valid), .rq_gran(g_rq_gran), .rq_ready(g_rq_ready),
+	.rs_valid(g_rs_valid), .rs_data(g_rs_data), .rs_pop(g_rs_pop), .flush(g_flush)
 );
+
+// ----------------------------------------------------- gfx5 through DDR3
+wire        g_rd, g_ack, g_dout_ready;
+wire [28:0] g_addr;
+wire [63:0] g_dout;
+ms32_gfx5_ddr u_gfx5 (
+	.clk(clk), .reset(reset), .flush(g_flush),
+	.rq_valid(g_rq_valid), .rq_gran(g_rq_gran), .rq_ready(g_rq_ready),
+	.rs_valid(g_rs_valid), .rs_data(g_rs_data), .rs_pop(g_rs_pop),
+	.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(g_dout), .g_dout_ready(g_dout_ready)
+);
+integer DLAT, DDRBUSY;
+reg        ddr_busy = 0;
+always @(posedge clk) ddr_busy <= DDRBUSY && (($urandom % 4) == 0);
+assign g_ack = g_rd && !ddr_busy;
+// in-order answers DLAT clocks after acceptance
+reg [63:0] ddr_q_data [0:255];
+integer    ddr_q_due [0:255];
+integer    ddr_wp = 0, ddr_rp = 0, cyc = 0;
+reg [63:0] g_dout_r; reg g_dout_ready_r;
+assign g_dout = g_dout_r; assign g_dout_ready = g_dout_ready_r;
+always @(posedge clk) begin
+	cyc <= cyc + 1;
+	g_dout_ready_r <= 0;
+	if (g_ack) begin
+		for (i = 0; i < 8; i = i + 1)
+			ddr_q_data[ddr_wp % 256][8*i +: 8] <= gfx5rom[((({g_addr[24:0], 3'b000}) - 28'h0E80000) + i) & gfx5_mask];
+		ddr_q_due[ddr_wp % 256] <= cyc + DLAT;
+		ddr_wp <= ddr_wp + 1;
+	end
+	if (ddr_rp != ddr_wp && ddr_q_due[ddr_rp % 256] <= cyc) begin
+		g_dout_r <= ddr_q_data[ddr_rp % 256];
+		g_dout_ready_r <= 1;
+		ddr_rp <= ddr_rp + 1;
+	end
+end
+
 ms32_lineplane #(.WRAP(1'b0)) u_rozf1 (
 	.clk(clk), .reset(reset),
 	.line_start(line_start), .hcnt(hcnt), .vcnt_next2(vcnt_next2), .fetch_line_active(fetch_active), .hdisplay(hdisplay),
@@ -120,7 +169,8 @@ ms32_lineplane #(.WRAP(1'b0)) u_rozf1 (
 	.line_addr(rz_la), .line_data(rz_ld), .vram_addr(rz_va), .vram_data(rz_vd),
 	.rom_req(rz_req), .rom_addr(rz_addr), .rom_valid(rz_valid), .rom_data(rz_data),
 	.pen(rz_pen), .colour(rz_col), .opaque(rz_op), .line_colour(rz_lcol),
-	.fetch_overrun(), .overrun_ev(), .line_done(), .line_cycles(), .line_misses()
+	.fetch_overrun(), .overrun_ev(), .line_done(), .line_cycles(), .line_misses(),
+	.rq_valid(), .rq_gran(), .rq_ready(1'b0), .rs_valid(1'b0), .rs_data(64'd0), .rs_pop(), .flush()
 );
 
 // ------------------------------------------------------------ ROM models
@@ -135,7 +185,6 @@ ms32_lineplane #(.WRAP(1'b0)) u_rozf1 (
 			NAME``_valid_r <= 1; NAME``_cnt <= 0; \
 		end else NAME``_cnt <= NAME``_cnt - 1; \
 	end
-integer i;
 `ROMMODEL(tx, txrom, txrom_mask)
 `ROMMODEL(bg, bgrom, bgrom_mask)
 `ROMMODEL(rd, gfx5rom, gfx5_mask)
@@ -199,6 +248,8 @@ initial begin
 	if (!$value$plusargs("CAP=%s", CAP))    CAP = "f1superb-road2";
 	if (!$value$plusargs("GAME=%s", GAME))  GAME = "f1superb";
 	if (!$value$plusargs("LAT=%d", LAT))    LAT = 12;
+	if (!$value$plusargs("DLAT=%d", DLAT))  DLAT = 60;
+	if (!$value$plusargs("DDRBUSY=%d", DDRBUSY)) DDRBUSY = 0;
 	if (!$value$plusargs("OUT=%s", OUTDIR)) OUTDIR = "simout/f1-mix";
 
 	fd = $fopen({"roms/", GAME, "/gfx5.bin"}, "rb");        n = $fread(gfx5rom, fd); $fclose(fd); gfx5_mask = n - 1;
@@ -252,7 +303,7 @@ initial begin
 	end
 	$fclose(fd);
 	#1;
-	$display("%s: bgmode %0d, LAT %0d", CAP, bgmode_r[0], LAT);
+	$display("%s: bgmode %0d, LAT %0d, DDR3 latency %0d busy %0d", CAP, bgmode_r[0], LAT, DLAT, DDRBUSY);
 
 	repeat (4) @(posedge clk);
 	reset = 0;
@@ -263,7 +314,7 @@ initial begin
 	if (fd == 0) begin $display("FATAL: cannot write %s/sim_rgb.txt", OUTDIR); $finish; end
 	for (k = 0; k < 320*224; k = k + 1) $fwrite(fd, "%06x\n", out_rgb[k]);
 	$fclose(fd);
-	$display("line colour mismatches: %0d of 224", line_mismatch);
+	$display("line colour mismatches: %0d of 224; road plane overrun %0d", line_mismatch, rd_ovr);
 	$display("wrote %s/sim_rgb.txt", OUTDIR);
 	$finish;
 end

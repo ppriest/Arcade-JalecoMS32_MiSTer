@@ -369,6 +369,10 @@ wire  [7:0] z80_data;
 wire        prg_req, tx_req, bg_req, roz_req, spr_req, gfx5_req, gfx5_valid;
 wire [23:0] gfx5_addr;
 wire [63:0] gfx5_data;
+// F-1 Super Battle's road textures come from DDR3 (ms32_gfx5_ddr, a client
+// of ms32_ddram_mux), not the SDRAM; held off while the ROM loader owns DDR3
+wire        g_rd, g_ack, g_dout_ready;
+wire [28:0] g_addr;
 wire [15:0] dbg_road_over, dbg_fpu_runs, dbg_road_vw, dbg_road_lw, dbg_road_lines, dbg_road_pens;
 wire [12:0] dbg_spr_flipx, dbg_spr_flipy, dbg_spr_drawn;
 wire [15:0] dbg_fy_attr;
@@ -532,6 +536,7 @@ ms32_core u_core (
 	.inputs(inputs), .dsw(dsw), .mahjong(mahjong), .mj_keys(mj_keys),
 	.analog_wheel(analog_wheel), .analog_accel(analog_accel), .analog_an2(analog_an2), .dsw2(dsw2),
 	.gfx5_req(gfx5_req), .gfx5_addr(gfx5_addr), .gfx5_valid(gfx5_valid), .gfx5_data(gfx5_data),
+	.g_rd(g_rd), .g_addr(g_addr), .g_ack(g_ack), .g_dout(c_dout), .g_dout_ready(g_dout_ready),
 	.dbg_road_over(dbg_road_over), .dbg_road_vw(dbg_road_vw), .dbg_road_lw(dbg_road_lw), .dbg_road_lines(dbg_road_lines),
 	.dbg_road_pens(dbg_road_pens), .dbg_spr_flipx(dbg_spr_flipx), .dbg_spr_flipy(dbg_spr_flipy),
 	.dbg_spr_drawn(dbg_spr_drawn), .dbg_fy_attr(dbg_fy_attr), .dbg_fy_idx(dbg_fy_idx),
@@ -713,6 +718,7 @@ ms32_ddram_mux u_ddram_mux (
 	.r_addr(r_addr), .r_din(r_din), .r_be(r_be), .r_we(r_we),
 	.DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DOUT(DDRAM_DOUT),
 	.DDRAM_DOUT_READY(DDRAM_DOUT_READY), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.g_rd(g_rd & ~ldr_active), .g_addr(g_addr), .g_ack(g_ack), .g_dout_ready(g_dout_ready),
 	.fifo_overflow(rot_overflow)
 );
 

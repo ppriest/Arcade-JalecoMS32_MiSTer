@@ -51,8 +51,17 @@
 //
 // SHAPE: as ms32_roz -- the same one-line-ahead double line buffer, and the
 // same overrun reporting when a line cannot be finished before it is shown.
+//
+// DDR=1 (the road, whose gfx5 is read from DDR3 through ms32_gfx5_ddr): the
+// one-request fetcher above would pay the DDR3's latency per granule, so the
+// queue deepens to 32, in MLAB. A pixel whose granule differs from the last
+// one asked for is pushed with "new" set, and that granule is requested as it
+// is pushed; the fetcher takes the answers in order, one per "new" pixel, and
+// draws the rest from the granule it holds. How many reads are in flight is
+// ms32_gfx5_ddr's to bound; the generator waits while it has no room.
 module ms32_lineplane #(
-	parameter bit WRAP = 1'b1          // road: wraps; ROZ: clips
+	parameter bit WRAP = 1'b1,         // road: wraps; ROZ: clips
+	parameter bit DDR  = 1'b0          // road: gfx5 through ms32_gfx5_ddr
 ) (
 	input  logic        clk,
 	input  logic        reset,
@@ -98,7 +107,16 @@ module ms32_lineplane #(
 	output logic        line_drawn,    // one clk per line whose vram[2 row] is non-zero
 	output logic        pen_nz,        // one clk per non-zero pen written to the line buffer
 	output logic [9:0]  dbg_row,       // the row the last line selected
-	output logic [15:0] dbg_rowword    // and what vram[2 row] gave back
+	output logic [15:0] dbg_rowword,   // and what vram[2 row] gave back
+
+	// DDR=1: requests to and answers from ms32_gfx5_ddr, and its flush
+	output logic        rq_valid,
+	output logic [19:0] rq_gran,
+	input  logic        rq_ready,
+	input  logic        rs_valid,
+	input  logic [63:0] rs_data,
+	output logic        rs_pop,
+	output logic        flush
 );
 
 	function automatic logic [34:0] sx18(input logic [17:0] v);
@@ -144,14 +162,25 @@ module ms32_lineplane #(
 	// One entry per pixel, pushed complete, so the fetcher can take the head the
 	// clock after it appears. Four deep: enough for the generator to keep its
 	// lead across a ROM answer, and the queue is only ever this engine's.
-	localparam int QD = 4;
-	logic [19:0] q_gran [0:QD-1];      // granule address, bits 23:3
-	logic [2:0]  q_byte [0:QD-1];
-	logic [3:0]  q_col  [0:QD-1];
-	logic        q_clear[0:QD-1];      // transparent: off the map, or a blank line
-	logic [9:0]  q_x    [0:QD-1];
-	logic [1:0]  q_wr, q_rd;
-	logic [2:0]  q_level;
+	// DDR=1: 32 deep, so the reads in flight at the DDR3's latency have pixels
+	// queued behind them.
+	localparam int QL = DDR ? 5 : 2;
+	localparam int QD = 1 << QL;
+	// {granule (bits 23:3), byte, colour, clear, x, new}. clear: transparent,
+	// off the map or a blank line. new (DDR=1): this pixel's granule is the
+	// next answer.
+	localparam int QW = 20 + 3 + 4 + 1 + 10 + 1;
+	(* ramstyle = "MLAB, no_rw_check" *) logic [QW-1:0] q_mem [0:QD-1];
+	logic [QW-1:0] q_in;
+	logic [QL-1:0] q_wr, q_rd;
+	logic [QL:0]   q_level;
+	wire  [QW-1:0] q_head = q_mem[q_rd];
+	wire  [19:0]   hq_gran  = q_head[QW-1 -: 20];
+	wire  [2:0]    hq_byte  = q_head[18:16];
+	wire  [3:0]    hq_col   = q_head[15:12];
+	wire           hq_clear = q_head[11];
+	wire  [9:0]    hq_x     = q_head[10:1];
+	wire           hq_new   = q_head[0];
 	// push and pop are what happens THIS clock, so the head a stalled fetcher
 	// sees is never the one it has already taken
 	logic        q_push;
@@ -159,16 +188,17 @@ module ms32_lineplane #(
 	// the generator tests this four clocks before it pushes, and its previous
 	// push may land in between, so it must leave room for that one too --
 	// without the -1 a full queue is overwritten under the fetcher's head
-	wire         q_full = (q_level >= QD[2:0] - 3'd1);
+	wire         q_full = (q_level >= QD[QL:0] - 1'b1);
+	always_ff @(posedge clk) if (q_push) q_mem[q_wr] <= q_in;
 
 	// ----------------------------------------------------------- the fetcher
 	logic        g_valid;              // a granule is held
 	logic [19:0] g_tag;
 	logic [63:0] g_data;
-	wire  [19:0] h_gran  = q_gran[q_rd];
+	wire  [19:0] h_gran  = hq_gran;
 	wire         h_hit   = g_valid && (g_tag == h_gran);
-	wire         h_clear = q_clear[q_rd];
-	wire         h_ready = (q_level != 3'd0);   // entries are pushed complete
+	wire         h_clear = hq_clear;
+	wire         h_ready = (q_level != 0);      // entries are pushed complete
 	logic        rom_req_r, rom_pend, rom_drop;
 	assign rom_req  = rom_req_r & ~rom_valid;
 	assign rom_addr = {1'b0, h_gran, 3'b000};
@@ -176,19 +206,37 @@ module ms32_lineplane #(
 	// What the fetcher does this clock. These are wires, not registers: a
 	// registered pop reaches the pointer a clock late, and the fetcher would
 	// take the same head twice.
-	wire f_fast = h_ready && (h_clear || h_hit);                       // no fetch needed
-	wire f_ask  = h_ready && !h_clear && !h_hit && !rom_req_r;          // ask the ROM
-	wire f_fill = h_ready && !h_clear && !h_hit && rom_req_r && rom_valid && !rom_drop;
-	assign q_pop = f_fast || f_fill;
+	wire f_fast, f_ask, f_fill;
+	wire [63:0] fill_data = DDR ? rs_data : rom_data;
+	generate if (DDR) begin : g_ddr_fetch
+		// the answer to a "new" pixel is the head of ms32_gfx5_ddr's FIFO
+		assign f_fast = h_ready && (h_clear || !hq_new);
+		assign f_ask  = 1'b0;
+		assign f_fill = h_ready && !h_clear && hq_new && rs_valid;
+	end else begin : g_rom_fetch
+		assign f_fast = h_ready && (h_clear || h_hit);                  // no fetch needed
+		assign f_ask  = h_ready && !h_clear && !h_hit && !rom_req_r;     // ask the ROM
+		assign f_fill = h_ready && !h_clear && !h_hit && rom_req_r && rom_valid && !rom_drop;
+	end endgenerate
+	assign q_pop  = f_fast || f_fill;
+	assign rs_pop = DDR && f_fill;
+
+	// DDR=1: the granule last asked for, this line
+	logic        lr_valid;
+	logic [19:0] lr_gran;
+	wire  [19:0] p3_gran  = {tileno, px_r[10:3]};
+	wire         p3_clear = blank || !in_r;
+	wire         p3_new   = DDR && !p3_clear && (!lr_valid || lr_gran != p3_gran);
+	wire         p3_wait  = p3_new && !rq_ready;
 
 	logic       wr_en;
 	logic [7:0] wr_pen;
 	wire [7:0]  next_pen = h_clear ? 8'd0
-	                     : f_fill  ? rom_data[8 * q_byte[q_rd] +: 8]
-	                               : g_data[8 * q_byte[q_rd] +: 8];
+	                     : f_fill  ? fill_data[8 * hq_byte +: 8]
+	                               : g_data[8 * hq_byte +: 8];
 	logic [3:0] wr_col;
 	logic [9:0] wr_x;
-	wire        h_last = (q_x[q_rd] == hlast);
+	wire        h_last = (hq_x == hlast);
 
 	always_ff @(posedge clk) begin
 		wr_en      <= 1'b0;
@@ -196,6 +244,8 @@ module ms32_lineplane #(
 		line_done  <= 1'b0;
 		line_drawn <= 1'b0;
 		q_push     <= 1'b0;
+		rq_valid   <= 1'b0;
+		flush      <= 1'b0;
 
 		if (reset) begin
 			gst           <= G_IDLE;
@@ -207,9 +257,10 @@ module ms32_lineplane #(
 			blank         <= 1'b1;
 			blank_bank    <= 2'b11;
 			g_valid       <= 1'b0;
-			q_wr          <= 2'd0;
-			q_rd          <= 2'd0;
-			q_level       <= 3'd0;
+			q_wr          <= '0;
+			q_rd          <= '0;
+			q_level       <= '0;
+			lr_valid      <= 1'b0;
 			overrun_ev    <= 1'b0;
 			fetch_overrun <= 1'b0;
 		end else begin
@@ -225,9 +276,11 @@ module ms32_lineplane #(
 				rom_req_r     <= 1'b0;
 				rom_drop      <= (rom_pend || rom_req) && !rom_valid;
 				g_valid       <= 1'b0;             // a line starts holding nothing
-				q_wr          <= 2'd0;
-				q_rd          <= 2'd0;
-				q_level       <= 3'd0;
+				q_wr          <= '0;
+				q_rd          <= '0;
+				q_level       <= '0;
+				lr_valid      <= 1'b0;
+				flush         <= DDR;              // ms32_gfx5_ddr drops the last line's
 				y             <= fetch_line_active ? vcnt_next2 : 12'd0;
 				hlast         <= hdisplay[9:0] - 10'd1;
 				lr_cnt        <= 4'd0;
@@ -294,13 +347,17 @@ module ms32_lineplane #(
 						tileno <= vram_data[11:0];
 						gst    <= G_P3;
 					end
-					G_P3: begin                        // vram_data is the colour word
-						q_push        <= 1'b1;
-						q_gran[q_wr]  <= {tileno, px_r[10:3]};
-						q_byte[q_wr]  <= px_r[2:0];
-						q_col[q_wr]   <= vram_data[3:0];
-						q_clear[q_wr] <= blank || !in_r;
-						q_x[q_wr]     <= gx;
+					// vram_data is the colour word, and holds while this waits
+					// for ms32_gfx5_ddr to take a request
+					G_P3: if (!p3_wait) begin
+						q_push <= 1'b1;
+						q_in   <= {p3_gran, px_r[2:0], vram_data[3:0], p3_clear, gx, p3_new};
+						if (p3_new) begin
+							rq_valid <= 1'b1;
+							rq_gran  <= p3_gran;
+							lr_valid <= 1'b1;
+							lr_gran  <= p3_gran;
+						end
 						cx  <= cx + dxx;
 						cy  <= cy + dxy;
 						gx  <= gx + 10'd1;
@@ -311,9 +368,9 @@ module ms32_lineplane #(
 				endcase
 
 				// --------------------------------------------- queue pointers
-				if (q_push) q_wr <= q_wr + 2'd1;
-				if (q_pop)  q_rd <= q_rd + 2'd1;
-				q_level <= q_level + {2'd0, q_push} - {2'd0, q_pop};
+				if (q_push) q_wr <= q_wr + 1'b1;
+				if (q_pop)  q_rd <= q_rd + 1'b1;
+				q_level <= q_level + {{QL{1'b0}}, q_push} - {{QL{1'b0}}, q_pop};
 
 				// --------------------------------------------------- fetcher
 				if (f_ask) begin
@@ -324,7 +381,8 @@ module ms32_lineplane #(
 					rom_req_r <= 1'b0;
 					g_valid   <= 1'b1;
 					g_tag     <= h_gran;
-					g_data    <= rom_data;
+					g_data    <= fill_data;
+					if (DDR) miss_cnt <= miss_cnt + 16'd1;
 				end
 				if (f_fast || f_fill) begin
 					wr_en  <= 1'b1;
@@ -333,13 +391,13 @@ module ms32_lineplane #(
 					// line transparently and looks identical to one not running.
 					pen_nz <= (next_pen != 8'd0);
 					wr_pen <= next_pen;
-					wr_col <= q_col[q_rd];
-					wr_x   <= q_x[q_rd];
+					wr_col <= hq_col;
+					wr_x   <= hq_x;
 					if (h_last) begin
 						line_busy   <= 1'b0;
 						line_done   <= 1'b1;
 						line_cycles <= cyc_cnt;
-						line_misses <= miss_cnt + {15'd0, f_fill};
+						line_misses <= miss_cnt + {15'd0, f_fill && !DDR};
 					end
 				end
 			end

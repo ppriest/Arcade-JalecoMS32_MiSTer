@@ -32,6 +32,43 @@ from build_rom_image import SETS, SET_KEY, PARENT, INVERT_LINES, ROT270, GAMES, 
 import extract_dips  # noqa: E402
 import extract_romstart  # noqa: E402
 
+
+_MAME_VERSION = None
+
+
+def mame_version():
+    """<mameversion> of the MAME the ROM definitions are checked against, from
+    `mame -version` ("0.289 (mame0289)" -> "0289"). MAME_DIR / MAME_EXE come from the
+    environment, then mister.env, then ~/.mister-core.env; never typed by hand."""
+    global _MAME_VERSION
+    if _MAME_VERSION:
+        return _MAME_VERSION
+    import os
+    import subprocess
+    here = Path(__file__).resolve().parent.parent
+    env = {}
+    for f in (Path(os.environ.get("MISTER_CORE_ENV") or Path.home() / ".mister-core.env"),
+              here / "mister.env"):
+        if f.exists():
+            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if ln and not ln.startswith("#") and "=" in ln:
+                    k, v = ln.split("=", 1)
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+    exe = Path(os.environ.get("MAME_DIR") or env.get("MAME_DIR") or ".") / (
+        os.environ.get("MAME_EXE") or env.get("MAME_EXE") or "mame.exe")
+    try:
+        out = subprocess.run([str(exe), "-version"], capture_output=True, text=True,
+                             timeout=30).stdout
+    except OSError:
+        out = ""
+    m = re.match(r"\s*0\.(\d+)", out)
+    if not m:
+        sys.exit("cannot read the MAME version from %s: set MAME_DIR / MAME_EXE. The .mra "
+                 "<mameversion> is the MAME the ROM definitions are checked against." % exe)
+    _MAME_VERSION = "%04d" % int(m.group(1))
+    return _MAME_VERSION
+
 # (set, region) -> bytes the ROM_LOADs actually fill; ROM_REGION can declare more (akiss's roztiles
 # is a 4 MB region holding one 2 MB ROM), and MAME's region is zero past the data
 _ROMS = extract_romstart.roms(extract_romstart.load())
@@ -276,7 +313,7 @@ def main():
                f"  <year>{GAMES[game]['year']}</year>",
                f"  <manufacturer>{esc(GAMES[game]['maker'])}</manufacturer>",
                f"  <rbf>{RBF_F1 if game == F1 else RBF}</rbf>",
-               "  <mameversion>0286</mameversion>"]
+               f"  <mameversion>{mame_version()}</mameversion>"]
         xml += buttons_xml(game)
         xml += switches_xml(game)
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.

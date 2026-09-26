@@ -2,6 +2,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_jalcrpt_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/dpram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/dpram_dc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_ddram_mux.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_gfx5_ddr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ddram_phy.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/memory/ms32_rom_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/screen_rotate_two.sv
