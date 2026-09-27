@@ -244,20 +244,47 @@ def switches_xml(game):
             if any("," in i for i in ids):
                 sys.exit(f"{game}: dip {name!r} has a comma in a label")
             name, ids = osd_fit(game, name, ids)
-            dips.append(f'    <dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>')
+            line = f'<dip name="{esc(name)}" bits="{",".join(map(str, pos))}" ids="{esc(",".join(ids))}"/>'
+            # a switch MAME does not know stays in the file, commented out, for
+            # anyone who finds out what it does
+            dips.append(f"    <!-- MAME: unknown. {line} -->" if name == "Unknown" else f"    {line}")
     dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4 * len(banks)))
     return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
 
 
-# Button names for the .mra's <buttons>, per set; a clone without an entry
-# takes its parent's, and a set with neither gets no <buttons> and shows the
-# core's generic "Button 1..5". Names are POSITIONAL, entry i being pad
-# button i+1 (joystick bit 4+i). MS32.sv sends pad buttons 1..5 to MAME's
-# BUTTON1..5, except on f1superb, where they are the accelerator, the brake
-# and the shift toggle. "-" marks a button the game does not use. Filled in
-# by the project owner from the manuals.
+# Button names for the .mra's <buttons>, per set, FOR THE OWNER TO FILL IN from
+# the manuals: the game's own names ("Shot", "Bomb"), never researched here.
+# A clone without an entry takes its parent's; every set must resolve to an
+# entry, so every .mra carries <buttons>. Names are POSITIONAL: entry i is pad
+# button i+1 (joystick bit 4+i), which MS32.sv sends to MAME's BUTTON(i+1),
+# except on f1superb (accelerator, brake, shift toggle). "-" is a button the
+# game does not use: on the mahjong sets the pad buttons do nothing, the panel
+# is on the keyboard. A name nobody has found stays "Button N", which
+# scripts/validate_mra.py reports, so it stays visible as an open item.
+# MAME's -listxml gives every joystick set here 5 buttons (the ms32 base port
+# declares them all), so the count is not evidence of what a game uses.
+GENERIC = ["Button 1", "Button 2", "Button 3", "Button 4", "Button 5"]
+MAHJONG = ["-", "-", "-", "-", "-"]
 BUTTONS = {
-    "f1superb": ["Accelerator", "Brake", "Shifter"],
+    # joystick sets
+    "bbbxing":  ["Jab", "Body Punch", "Power Punch", "-", "-"],    # Best Bout Boxing
+    "desertwr": ["Attach (Rescue)", "Take Off/Landing", "-", "-", "-"],    # Desert War
+    "gametngk": ["Shot", "Bomb", "-", "-", "-"],    # The Game Paradise
+    "gratia":   ["Air Shot", "Ground Bomb", "Ultimate Shot", "-", "-"],    # Gratia (and gratiaa)
+    "p47aces":  ["Fire", "Bomb", "-", "-", "-"],    # P-47 Aces (and p47acesa)
+    "tetrisp":  ["Rotate CCW", "Rotate CW", "-", "-", "-"],    # Tetris Plus
+    "tp2m32":   ["Rotate CCW", "Rotate CW", "Bomb", "-", "-"],    # Tetris Plus 2
+    "wpksocv2": ["Button 1", "Button 2", "Button 3", "Button 4", "Button 5"],    # World PK Soccer V2 (unsupported)
+    # quiz sets: answer buttons
+    "hayaosi2": ["Button 1", "Button 2", "Button 3", "Button 4", "Button 5"],    # Hayaoshi Quiz Grand Champion Taikai
+    "hayaosi3": ["Button 1", "Button 2", "Button 3", "Button 4", "Button 5"],    # Hayaoshi Quiz Nettou Namahousou (and hayaosi3a)
+    # mahjong sets: keyboard
+    "suchie2":  MAHJONG,    # Idol Janshi Suchie-Pai II (and suchie2o)
+    "kirarast": MAHJONG,    # Ryuusei Janshi Kirara Star (and kirarasta)
+    "akiss":    MAHJONG,    # Mahjong Angel Kiss (and akissa)
+    "bnstars":  MAHJONG,    # Vs. Janshi Brandnew Stars
+    # driving
+    "f1superb": ["Accelerator", "Brake", "Shifter"],   # F-1 Super Battle
 }
 # the rest of the list stays where CONF_STR's J1 line has it: the core reads
 # fixed bits, so these may not move
@@ -268,7 +295,7 @@ BUTTONS_DEFAULT = "A,B,X,Y,R,Start,Select,L"      # CONF_STR's jn line
 def buttons_xml(game):
     names = BUTTONS.get(game, BUTTONS.get(PARENT.get(game)))
     if names is None:
-        return []
+        sys.exit(f"{game}: no BUTTONS entry for the set or its parent -- add one")
     if not 1 <= len(names) <= 5:
         sys.exit(f"{game}: BUTTONS has {len(names)} names; the core has 5 buttons")
     if any("," in n or not n.strip() for n in names):
@@ -282,6 +309,8 @@ UNSUPPORTED = {"wpksocv2"}
 
 
 def main():
+    """Writes the .mra files; returns their paths."""
+    written = []
     check_map()
     caps = [a for a in sys.argv[2:]] if len(sys.argv) > 2 and sys.argv[1] == "--with-capture" else []
 
@@ -314,6 +343,7 @@ def main():
                f"  <manufacturer>{esc(GAMES[game]['maker'])}</manufacturer>",
                f"  <rbf>{RBF_F1 if game == F1 else RBF}</rbf>",
                f"  <mameversion>{mame_version()}</mameversion>"]
+        xml.append(f"  <rotation>{'vertical (ccw)' if game in ROT270 else 'horizontal'}</rotation>")
         xml += buttons_xml(game)
         xml += switches_xml(game)
         # The mod byte always goes first (docs/LESSONS_LEARNED.md): the HPS sends roms in file order.
@@ -368,14 +398,21 @@ def main():
             dump = [l.replace('size="8192"', 'size="1179648"') for l in xml]
             dump_dir = REPO / "releases" / "_dev"
             dump_dir.mkdir(parents=True, exist_ok=True)
-            (dump_dir / f"{NAMES.get(game, game)} (RAM dump).mra").write_text(
-                "\n".join(dump) + "\n", encoding="utf-8", newline="\n")
+            dump_path = dump_dir / f"{NAMES.get(game, game)} (RAM dump).mra"
+            dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8", newline="\n")
+            written.append(dump_path)
         text = "\n".join(xml)
         assert text.index('<rom index="1">') < text.index('<rom index="0"'), "mod byte must precede rom index 0"
         path = out_dir / (f"{NAMES.get(game, game)} + capture {cap}.mra" if cap else f"{NAMES.get(game, game)}.mra")
         path.write_text("\n".join(xml) + "\n", encoding="utf-8", newline="\n")
         print(f"{path.name}: {pos:#x} bytes streamed, key {key}")
+        written.append(path)
+    return written
 
 
 if __name__ == "__main__":
-    main()
+    # scripts/validate_mra.py over what was written: generic button names are
+    # reported there until BUTTONS is filled in
+    import subprocess
+    files = [str(f) for f in main()]
+    subprocess.run([sys.executable, str(REPO / "scripts" / "validate_mra.py")] + files)

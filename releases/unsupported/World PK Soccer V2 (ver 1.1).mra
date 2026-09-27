@@ -9,6 +9,8 @@
   <manufacturer>Jaleco</manufacturer>
   <rbf>JalecoMS32</rbf>
   <mameversion>0289</mameversion>
+  <rotation>horizontal</rotation>
+  <buttons names="Button 1,Button 2,Button 3,Button 4,Button 5,Start,Coin,Pause,Service,Test" default="A,B,X,Y,R,Start,Select,L"/>
   <switches default="FF,FF,1F,FF" base="0">
     <dip name="Demo Sounds" bits="12" ids="Off,On"/>
     <dip name="Coinage" bits="13,14,15" ids="2 Coins/3 Credits,1 Coin/4 Credits,3 Coins/1 Credit,1 Coin/2 Credits,4 Coins/1 Credit,1 Coin/3 Credits,2 Coins/1 Credit,1 Coin/1 Credit"/>
