@@ -1,0 +1,89 @@
+{
+ "groups": [
+  {
+   "name": "V70",
+   "match": "u_core\\|u_sys\\|u_cpu",
+   "color": "#e6194b"
+  },
+  {
+   "name": "V70 cache",
+   "match": "u_core\\|u_sys\\|u_cache",
+   "color": "#9fb4ff"
+  },
+  {
+   "name": "Work RAM",
+   "match": "u_core\\|u_sys\\|wram",
+   "color": "#911eb4"
+  },
+  {
+   "name": "System other",
+   "match": "u_core\\|u_sys",
+   "color": "#bfef45"
+  },
+  {
+   "name": "ROZ",
+   "match": "u_core\\|u_video\\|(u_roz|u_rozram)",
+   "color": "#7fd34e"
+  },
+  {
+   "name": "Tilemaps (BG, TX)",
+   "match": "u_core\\|u_video\\|(u_bg|u_tx|u_bgram|u_txram)",
+   "color": "#3cb44b"
+  },
+  {
+   "name": "Sprites + frame buffer",
+   "match": "u_core\\|u_video\\|(u_spr|u_fb|u_objram)",
+   "color": "#42d4f4"
+  },
+  {
+   "name": "Palette, priority",
+   "match": "u_core\\|u_video\\|(u_pal|u_priram|u_mix)",
+   "color": "#fabed4"
+  },
+  {
+   "name": "Video other",
+   "match": "u_core\\|u_video",
+   "color": "#469990"
+  },
+  {
+   "name": "Z80",
+   "match": "u_sound\\|u_cpu",
+   "color": "#ff7b9c"
+  },
+  {
+   "name": "YMF271",
+   "match": "u_sound\\|u_ymf",
+   "color": "#ffe119"
+  },
+  {
+   "name": "Sound other",
+   "match": "^emu\\|u_sound",
+   "color": "#d4a017"
+  },
+  {
+   "name": "SDRAM, DDR3 mux",
+   "match": "^emu\\|(u_sdram|u_ddram_mux)",
+   "color": "#4363d8"
+  },
+  {
+   "name": "CRT V-Size",
+   "match": "u_crt_vsize",
+   "color": "#c08040"
+  },
+  {
+   "name": "CRT Adjust",
+   "match": "u_crt_adjust|^emu\\|u_crt",
+   "color": "#9a6324"
+  },
+  {
+   "name": "Video out",
+   "match": "^emu\\|(arcade_video|video_freak|screen_rotate_two|u_rotate)",
+   "color": "#808000"
+  },
+  {
+   "name": "hps_io",
+   "match": "^emu\\|hps_io",
+   "color": "#2f6f6a"
+  }
+ ]
+}

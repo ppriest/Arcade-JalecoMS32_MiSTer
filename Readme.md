@@ -11,6 +11,7 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
   - [Supported](#supported)
 - [Out of scope for now](#out-of-scope-for-now)
 - [Hardware](#hardware)
+  - [Floorplan](#floorplan)
 - [Installation](#installation)
 - [Status](#status)
   - [Todo](#todo)
@@ -107,6 +108,18 @@ The mahjong sets support keyboard with MAME's default keys:
 | Jaleco FPU (x2) | F-1 Super Battle's maths coprocessors | Written from MAME's `jalfpu` |
 | Z80 | Sound CPU, 8 MHz | Vendored |
 | YMF271 | FM + PCM sound | Vendored Seibu SPI core. Spectrum correlates with MAME, RMS within 2% |
+
+### Floorplan
+
+Where the logic sits on the Cyclone V, read from the compiled design with `scripts/floorplan.py` (blocks defined in `scripts/floorplan.json`). One cell per LAB, M10K or DSP site, coloured by the block owning most of it, brighter when fuller. The thin columns are M10K and DSP; the empty area at the top right is the HPS; grey is the MiSTer framework. LUT counts are combinational cells, two per ALM.
+
+Revision `MS32`, fitted 26 Sep 2026:
+
+![Floorplan of MS32](docs/floorplan/MS32.png)
+
+Revision `MS32F1`, fitted 26 Sep 2026:
+
+![Floorplan of MS32F1](docs/floorplan/MS32F1.png)
 
 ## Installation
 
