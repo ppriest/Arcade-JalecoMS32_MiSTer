@@ -7,9 +7,12 @@
         -> releases/_dev/<Description> + capture tetrisp-title.mra: the ROMs plus the
            capture blob as rom index 2, so the board renders that frame from the real ROMs
 
-Each normal .mra also gets a releases/_dev/<Description> (RAM dump).mra twin whose
-<nvram> is 1,179,648 bytes: with a DEBUG_ISSP build, scripts/dump_ram.py trigger
-has the core write the NVRAM and the video RAMs into that file (MS32.sv).
+    python scripts/build_mra.py --dev      -> releases/<Description>.mra, and a
+        releases/_dev/<Description> (RAM dump).mra twin whose <nvram> is 1,179,648
+        bytes: with a DEBUG_ISSP build, scripts/dump_ram.py trigger has the core write
+        the NVRAM and the video RAMs into that file (MS32.sv)
+
+releases/_dev/ is gitignored: development .mra files stay local.
 
 The map is ms32_sdram_top.sv's (this file repeats its bases and sizes and
 checks them against that file). Each region is filled by REPEATING its ROM
@@ -313,6 +316,7 @@ def main():
     written = []
     check_map()
     caps = [a for a in sys.argv[2:]] if len(sys.argv) > 2 and sys.argv[1] == "--with-capture" else []
+    dev = "--dev" in sys.argv[1:]
 
     for game, regions in SETS.items():
         cap = next((c for c in caps if c.split("-")[0] == game), None)
@@ -394,7 +398,7 @@ def main():
             # read back by the HPS when the core asks (MS32.sv, "NVRAM SAVE")
             xml.append('  <nvram index="4" size="8192"/>')
         xml.append("</misterromdescription>")
-        if not cap:
+        if dev and not cap:
             dump = [l.replace('size="8192"', 'size="1179648"') for l in xml]
             dump_dir = REPO / "releases" / "_dev"
             dump_dir.mkdir(parents=True, exist_ok=True)

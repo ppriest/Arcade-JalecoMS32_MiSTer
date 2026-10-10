@@ -132,3 +132,5 @@ __pycache__/
 
 # bench source lists (the *.f rule above is for Quartus files)
 !sim/*/files.f
+# development .mra files (build_mra.py --dev, --with-capture)
+/releases/_dev/
