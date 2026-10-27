@@ -128,12 +128,10 @@ module ms32_video (
 	logic        bgmode;
 	always_ff @(posedge clk) begin
 		if (reset) begin
-			// MAME's video_start defaults, "tp2m32 doesn't set the brightness
-			// registers so we need sensible defaults" (ms32_v.cpp 82-84): the
-			// brightness pair 0xFFFF and sprite control 0x10 = 0x8000 (list
-			// walked 0->tail). tp2m32 never writes either. Bank 1 starts at
-			// factor 0x100 (m_brt1_* in video_start), i.e. registers 0.
-			bgmode <= 1'b0; brt0 <= 16'hFFFF; brt1 <= 16'hFFFF; brt2 <= 16'h0000; brt3 <= 16'h0000;
+			// MAME's video_start defaults, for tp2m32, which writes neither:
+			// brightness registers 0 (both banks factor 0x100) and sprite
+			// control 0x10 = 0x8000 (list walked 0->tail).
+			bgmode <= 1'b0; brt0 <= 16'h0000; brt1 <= 16'h0000; brt2 <= 16'h0000; brt3 <= 16'h0000;
 			spr_ctrl10 <= 16'h8000;
 		end else if (vreg_we) begin
 			if (vreg_off[11:5] == 7'b1010_000 && vreg_off[4:2] < 3'd6) tx_scroll[vreg_off[4:2]] <= vreg_data;   // 0xA00-0xA17
@@ -168,8 +166,8 @@ module ms32_video (
 	);
 	// Registered: vcnt changes at the end of a line and line_start comes at
 	// hdisplay, so the compare has the whole blanking interval to settle. As
-	// a wire it was the one path over clk_sys in the first build with the
-	// YMF271 (-0.178 ns, r_vdisplay into ms32_roz's state register).
+	// a wire it fails clk_sys setup (-0.178 ns, r_vdisplay into ms32_roz's
+	// state register).
 	logic fetch_active;
 	always_ff @(posedge clk) fetch_active <= (vcnt_next2 < vdisplay);
 
@@ -320,6 +318,7 @@ module ms32_video (
 		.incyy({roz_ctrl[9][0], roz_ctrl[8]}), .incyx({roz_ctrl[11][0], roz_ctrl[10]}),
 		.offsx(roz_ctrl[12]), .offsy(roz_ctrl[13]), .offsx_hi(roz_ctrl[14][0]), .offsy_hi(roz_ctrl[15][0]),
 		.super_mode(roz_ctrl[23][0]),
+		.wrap(roz_ctrl[16] == 16'd0 || roz_ctrl[20] != 16'd0),   // 0x640, 0x650
 		.line_addr(roz_la), .line_data(roz_ld),
 		.vram_addr(roz_va), .vram_data(roz_vd),
 		.rom_req(roz_rom_req), .rom_addr(roz_rom_addr), .rom_valid(roz_rom_valid), .rom_data(roz_rom_data),

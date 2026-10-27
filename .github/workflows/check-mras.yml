@@ -1,0 +1,29 @@
+# Backstop for scripts/hooks/pre-push: a push from a machine without the hook, or a web edit,
+# still gets checked. It cannot un-publish; a red run means fix releases/ at once.
+name: Check published MRAs
+
+on:
+  push:
+    paths: ["releases/**"]
+  pull_request:
+    paths: ["releases/**"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Released cores and layout changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"; head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"; head="${{ github.sha }}"
+          fi
+          case "$base" in 0000000000000000000000000000000000000000) base="$head~1";; esac
+          python scripts/check_release_mras.py --base "$base" --head "$head"

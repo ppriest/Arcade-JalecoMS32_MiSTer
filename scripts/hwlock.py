@@ -204,7 +204,7 @@ class jtag_session:
 
     wait=True (the default) reserves the Blaster and waits for an in-flight
     build or simulation instead of refusing; the reservation stops new ones
-    starting. wait=False keeps the old behaviour: refuse immediately.
+    starting. wait=False refuses immediately.
     """
 
     def __init__(self, what="jtag", wait=True, timeout=3600):

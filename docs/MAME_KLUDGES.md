@@ -5,7 +5,8 @@ MAME is this core's behaviour reference, but `ms32.cpp`, `ms32_v.cpp`, `ms32_spr
 it does not understand, or has not implemented the hardware. Following those blindly copies the
 guess. This file lists each one that touches an in-scope set, what MAME does, and what the core
 does. Hardware measurements, where they exist, are in [`HARDWARE_NOTES.md`](HARDWARE_NOTES.md)
-(Charles MacDonald's notes). Line numbers are MAME `783e8a2efc2`.
+(Charles MacDonald's notes). Line numbers are MAME `783e8a2efc2`, except rows marked PR, which are
+MAME PR 16243 at `2467918640b`.
 
 **Core column:** *copies* MAME; *differs* (and why); *n/a* (not in the core's scope).
 
@@ -29,14 +30,14 @@ does. Hardware measurements, where they exist, are in [`HARDWARE_NOTES.md`](HARD
 
 | MAME | Where | Core |
 |---|---|---|
-| Mixer and priority: "spaghetti code", "complete guesswork and missing many spots", "actually understand this (per-scanline priority and alpha-blend over every layer?)" | ms32_v.cpp 376, 423-425 | copies MAME's decision tree exactly (`ms32_mixer`); it is the only reference and the captures match it |
+| Mixer and priority: the per-pixel priority-RAM lookup and `apply_pixel_effects()`. Its comment block still describes a glow for sprites with brightness 2 and no shadow for brightness 1; the code has neither | PR ms32_v.cpp 207-270, 556-638; ms32.h 132-140 | copies the code (`ms32_mixer`), not the comment |
 | Unhandled priority mask `0xc0`: MAME draws `machine().rand()` pixels and pops a message | ms32_v.cpp 522-526 | differs: not reproduced (no random pixels) |
 | `hayaosi3` final round priority `0xcc`: "may have some blending, hard to say without ref video" | ms32_v.cpp 527-538 | copies |
 | Global brightness: "I'm not sure how the brightness should be applied"; "The second brightness control might apply to shadows"; "fix p47aces brightness"; the header's "cut by 50% at most" | ms32_v.cpp 107, 124-160; ms32.cpp 99-103 | copies the current `(0x100 - reg)/0x100` scaling (three multipliers in `ms32_mixer`); the header's 50% note is older than that code |
-| Power-on defaults "tp2m32 doesn't set the brightness registers so we need sensible defaults": brightness `0xFFFF`, sprite control `0x10` = `0x8000` | ms32_v.cpp 82-84 | copies (from this commit; the core reset both to 0 before, which walks the sprite list the other way until a game writes it) |
-| Shadow sprites guessed from one priority bit; "the second global brightness register" unexplained | ms32.cpp 105-110 | copies (shadow = halve) |
+| Power-on defaults "tp2m32 doesn't set the brightness registers so we need sensible defaults": brightness registers 0 (factor 0x100), sprite control `0x10` = `0x8000` | PR ms32_v.cpp 90-94 | copies |
+| Shadow sprites guessed from one priority bit | PR ms32.cpp 104-106 | copies: priority-RAM bit 2 clear halves a non-sprite pick where a sprite pen is opaque |
 | Background colour: pen 0 "correct for gametngk, but wrong for f1superb" | ms32.cpp 128-129, ms32_v.cpp 366-368 | copies (pen 0; f1superb is out of scope) |
-| ROZ wrapping: "always ON, breaking places where it gets very small ... (p47aces, kirarast, bbbxing, gametngk need it OFF), gratia and desertwr need it ON"; registers `0x40/0x44/0x50/0x54` "unknown meaning", their values listed per game | ms32.cpp 131-133, ms32_v.cpp 214-230 | copies: wrap always on, the four registers ignored. The per-game table in ms32_v.cpp is the lead for a real fix |
+| ROZ wrapping: wraps when `0x40` is 0 or `0x50` is not, from a per-game register survey and PCB recordings of bbbxing and desertwr | PR ms32_v.cpp 367-393 | copies (`ms32_roz` `wrap`; outside the 2048x2048 map is transparent) |
 | ROZ0, the second rotate plane at `0xfe400000`: not implemented | ms32.cpp 645-646 | copies (not implemented); whether any in-scope game writes it is unchecked |
 | Flip screen: MAME flips the four tilemaps, "TODO: sprite device" | ms32_v.cpp 698-705 | differs: the games' Flip Screen DIP does nothing yet; Flip 180 in the OSD rotates the whole picture. Decision pending (ROADMAP) |
 | "sprite control 0x10 also uses bits 0-11 for sprite start address?" | ms32_v.cpp 175 | copies (only bit 15, list direction, is used) |

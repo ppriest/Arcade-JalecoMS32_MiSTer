@@ -9,7 +9,7 @@
 
 Refuses to start while Quartus or ModelSim is running, and holds the marker
 that makes builds and simulations refuse to start meanwhile (scripts/hwlock.py:
-a JTAG session concurrent with either has bugchecked this PC). Needs the
+a JTAG session concurrent with either can crash the host (bugcheck)). Needs the
 MS32_stp revision (DEBUG_ISSP) on the board and the USB-Blaster connected.
 """
 import subprocess

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build Quartus from a staged snapshot of HEAD, leaving the tree free.
 
-Ported from the Fuuki core (D:\\Arcade-Fuuki_MiSTer), which had in turn ported it
-from Psikyo. It exists for the reason Fuuki paid for by leaving it unported:
-a Quartus compile takes about thirteen minutes, and for all of it the tree
-has to be left alone. Editing sources during a run risks the build, and NOT
-editing them means every unrelated task waits. See docs/WORKFLOW.md.
+Ported from the Fuuki core, which had ported it from Psikyo. Editing sources
+during an in-tree compile risks the build, and not editing them means every
+unrelated task waits for it.
 
 The compile runs in a dedicated git worktree at <repo>/build (gitignored),
 so the main tree is free the moment the build starts, and every scrap of
@@ -45,9 +44,6 @@ The worktree persists between builds -- Quartus's db/ with it, which costs
 nothing for full compiles and avoids re-checkout churn -- and each run
 hard-resets it to HEAD. A .build_running marker refuses two overlapping
 staged builds.
-
-scripts/build.sh still exists and still builds in-tree; use it when you want
-the compile to see uncommitted work and are willing to leave the tree alone.
 """
 import argparse
 import datetime
@@ -73,8 +69,7 @@ def run(cmd, **kw):
 def read_slacks(summary):
     """Print every clock's setup slack; return the ones that fail.
 
-    All of them, not clk_sys alone: a violation on any clock is a violation,
-    and scripts/build.sh gates on exactly the same rule.
+    All of them, not clk_sys alone: a violation on any clock is a violation.
     """
     out = []
     if not os.path.exists(summary):

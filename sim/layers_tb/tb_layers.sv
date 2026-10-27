@@ -104,6 +104,7 @@ ms32_roz u_roz (
 	.incyy({rozctrl[9][0], rozctrl[8][15:0]}), .incyx({rozctrl[11][0], rozctrl[10][15:0]}),
 	.offsx(rozctrl[12][15:0]), .offsy(rozctrl[13][15:0]),
 	.offsx_hi(rozctrl[14][0]), .offsy_hi(rozctrl[15][0]), .super_mode(rozctrl[23][0]),
+	.wrap(rozctrl[16][15:0] == 16'd0 || rozctrl[20][15:0] != 16'd0),
 	.line_addr(rz_la), .line_data(rz_ld),
 	.vram_addr(rz_va), .vram_data(rz_vd),
 	.rom_req(rz_req), .rom_addr(rz_addr), .rom_valid(rz_valid), .rom_data(rz_data),

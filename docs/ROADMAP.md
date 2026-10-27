@@ -281,9 +281,9 @@ divergence to be measured against captures, not as a modelled mechanism.
 table. Up to MAME PR 16135 the driver probed eleven fixed addresses of it and ran a per-pixel case
 chain it labelled "complete guesswork"; PR 16243 replaces that for every set with the lookup
 f1superb's mixer had: a 13-bit index per pixel (which layers are opaque, the sprite's priority, a
-line depth) whose byte picks the layer, a brightness bank and a glow or half-brightness flag.
-`rtl/video/ms32_mixer.sv` follows the PR, with `F1=1` for f1superb (which the PR leaves without
-brightness). Not in the RTL: the PR's second pass, `apply_sprite_effects()`, which redoes the lookup
+line depth) whose byte picks the layer, a brightness bank and a half-brightness (shadow) flag.
+`rtl/video/ms32_mixer.sv` follows the PR head (`2467918640b`), with `F1=1` for f1superb's road plane
+and line depth; the effects are the same for both. Not in the RTL: the PR's second pass, `apply_sprite_effects()`, which redoes the lookup
 inside sprite boxes where no sprite pen is opaque; it needs box coverage the sprite frame buffer does
 not store, and it changed no pixel in any of the captures (`render_model.py` counts them). As
 written it always looks up priority 0 -- it stores `(1 + (attr & 0xf0)) << 8` and recovers
@@ -925,7 +925,7 @@ that can go stale -- it is not checked.
 1. **ROM image and map.** `build_rom_image.py` stops excluding `f1superb`, gains its `gfx5` region,
    and both maps go into `build_mra.py`'s `MAP` check and `ms32_sdram_top.sv`. Verifiable with no new
    hardware: the image builds, the `.mra` generates, the sizes are arithmetic.
-2. **MAME reference. Done.** The PR branch is a git worktree at `E:/mame-f1` (`f1superb-work`),
+2. **MAME reference. Done.** The PR branch is checked out as its own MAME git worktree,
    built as the `ms32` subtarget. `scripts/mame/f1superb_trace.patch` adds, to that build only:
    native counters for the road RAMs and the priority RAM (`MS32_TRACE=<file>`), and a reference
    trace of each FPU (`JALFPU_TRACE=<dir>`) as one ordered event stream — host writes, routine

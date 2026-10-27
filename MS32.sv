@@ -5,13 +5,13 @@
 //  State: the board (rtl/ms32_core.sv: the V70 and its memory map on
 //  clk_cpu, the video path on clk_sys) on the framework, with the DDR3
 //  window (sprite frame buffer) and the SDRAM (every ROM, through
-//  rtl/memory/ms32_sdram_top.sv, tile decryption on the way in). No sound
-//  yet. A capture blob (scripts/build_capture_blob.py, ioctl index 2) can
-//  still be loaded with the CPU held (mod byte bit 7), so a frame MAME
-//  rendered is rendered by the hardware from the real ROMs.
+//  rtl/memory/ms32_sdram_top.sv, tile decryption on the way in) and the
+//  sound board (ms32_sound). A capture blob (scripts/build_capture_blob.py,
+//  ioctl index 2) can be loaded with the CPU held (mod byte bit 7), so a
+//  frame MAME rendered is rendered by the hardware from the real ROMs.
 //
 //  Download indices: 0 the ROM set (.mra), 1 the mod byte, 2 a capture blob,
-//  254 the DIP switches.
+//  4 NVRAM, 254 the DIP switches.
 //
 //  This file is derived from MiSTer_Template's Template.sv, which is
 //  GPL-2.0-or-later; it is distributed here under GPL-3.0-or-later.
@@ -110,8 +110,8 @@ localparam CONF_STR = {
 	"H1P1O[85],Road layer,On,Off;",
 `endif
 	"-;",
-	// Reset ahead of the joystick lines, as every other core here has it: after
-	// them the OSD entry was shown but status[0] never rose (ISSP probe V)
+	// Reset ahead of the joystick lines: after them the OSD entry is shown but
+	// status[0] never rises
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
 	"J1,Button 1,Button 2,Button 3,Button 4,Button 5,Start,Coin,Pause,Service,Test;",
@@ -246,18 +246,18 @@ assign game_vertical = mod_byte[3];
 
 // DIPs: .mra <switches> arrive as index 254, one byte per switch bank,
 // low byte first: the 32-bit word ms32_map reads at 0xFCC00010.
-`ifdef F1SUPERB
-// f1superb has a second bank on the MB-93159 board (SW3, comms mode and car ID)
-// at 0xFD0D0000, so its .mra sends eight switch bytes and bytes 4-7 are it.
-reg [7:0] sw[8] = '{8'hFF, 8'hFF, 8'hFF, 8'hFF, 8'h00, 8'hFF, 8'hFF, 8'hFF};
-always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd254 && !ioctl_addr[24:3]) sw[ioctl_addr[2:0]] <= ioctl_dout;
-wire [31:0] dsw2 = {sw[7], sw[6], sw[5], sw[4]};
-`else
-wire [31:0] dsw2 = 32'hFFFF_FF00;   // unused: ms32_cpu_sys only reads it under F1SUPERB
 reg [7:0] sw[4] = '{8'hFF, 8'hFF, 8'hFF, 8'hFF};
 always @(posedge clk_sys) if (ioctl_wr && ioctl_index == 16'd254 && !ioctl_addr[24:2]) sw[ioctl_addr[1:0]] <= ioctl_dout;
+`ifdef F1SUPERB
+// f1superb has a second bank on the MB-93159 board (SW3, comms mode and car ID)
+// at 0xFD0D0000. Its .mra puts it in byte 3, which the DSW word leaves unused:
+// Main_MiSTer applies .mra defaults only to bits 0-31.
+wire [31:0] dsw2 = {24'hFF_FFFF, sw[3]};
+wire [31:0] dsw  = {8'hFF, sw[2], sw[1], sw[0]};
+`else
+wire [31:0] dsw2 = 32'hFFFF_FF00;   // unused: ms32_cpu_sys only reads it under F1SUPERB
+wire [31:0] dsw  = {sw[3], sw[2], sw[1], sw[0]};
 `endif
-wire [31:0] dsw = {sw[3], sw[2], sw[1], sw[0]};
 // F-1 Super Battle's controls (ms32.cpp analog_r and the f1superb ports).
 // The word at 0xFD0E0000 is {AN2, AN2, AN1 steering, AN0 accelerator}; the
 // brake and the shifter are not analog at all, they are INPUTS bits 1 and 0.
@@ -268,12 +268,12 @@ wire [31:0] dsw = {sw[3], sw[2], sw[1], sw[0]};
 //   AN2  eight switches, all pulled up: MAME calls bit 7 "Shift Brake" and
 //        does not know the rest. Left at 0xFF, as MAME leaves them.
 //
-// Unverified on hardware: nothing here has been tried on a DE10-nano yet.
+// Not yet checked on the board: the analog pedal and wheel.
 wire signed [7:0] joy_x = joy_analog_0[7:0];
 // The stick when it is off centre, otherwise the d-pad, which ramps towards
 // lock while it is held and returns to centre when it is not -- steering that
-// jumps to full lock is not steering. One step per frame-ish tick, ~0.9 s lock
-// to lock; clk_sys/2^18 is about 366 Hz, so 128 steps is 0.35 s each way.
+// jumps to full lock is not steering. One step per 2^18 clk_sys (about
+// 366 Hz): 128 steps, 0.35 s, from centre to lock.
 reg  [7:0] wheel_digital = 8'h80;
 reg [17:0] wheel_tick = 18'd0;
 always @(posedge clk_sys) begin
@@ -613,10 +613,8 @@ altsource_probe #(
 // JTAG counters for the memory path and the ROZ cache (rtl/debug/issp_probe.sv;
 // read with scripts/read_issp.py, which holds the machine-wide JTAG lock).
 // Not in the F-1 Super Battle build: half of it is the ROZ cache, which
-// F1SUPERB replaces with line planes, and the download counters have done
-// their job. That revision fills the device to 94% and the framework scaler's
-// HDMI pixel clock is decided by the fitter seed at that point, so 118 ALMs is
-// worth more here than counters nothing reads.
+// F1SUPERB replaces with line planes, and that revision fills the device to
+// 94% (MS32F1 fit report), where 118 ALMs decide whether HDMI closes timing.
 `ifndef F1SUPERB
 issp_probe #(.INSTANCE_ID("M")) u_issp (
 	.clk(clk_sys),

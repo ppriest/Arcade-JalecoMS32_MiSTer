@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse to publish .mra files that need a core not released in the same push.
+# Installed by: git config core.hooksPath scripts/hooks   (new_core.py does it)
+root=$(git rev-parse --show-toplevel) || exit 1
+exec python "$root/scripts/check_release_mras.py" --pre-push

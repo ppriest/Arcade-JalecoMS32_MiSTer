@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Scan a folder of .mra files, collect the MAME zip filenames referenced by
 # their zip="..." attributes (pipe-separated lists included), and upload
 # those zips from a local MAME ROMs folder to a MiSTer over SFTP.
 #
-# Usage: sync-mame-roms.sh [mra_dir] [rom_src] [sftp_host] [sftp_user] [sftp_pass]
+# Usage: scripts/sync-mame-roms.sh <rom_src> [mra_dir]
+# MISTER_HOST, MISTER_USER and MISTER_PASSWORD come from the environment or
+# ./mister.env (gitignored).
 set -euo pipefail
 
-MRA_DIR="${1:-.}"
-ROM_SRC="${2:-F:/Emulation/roms/MAME 0.286 ROMs (merged)}"
-SFTP_HOST="${3:-192.168.68.251}"
-SFTP_USER="${4:-root}"
-SFTP_PASS="${5:-1}"
+if [[ -f mister.env ]]; then
+    set -a; . ./mister.env; set +a
+fi
+ROM_SRC="${1:?usage: $0 <rom_src> [mra_dir]}"
+MRA_DIR="${2:-releases}"
+SFTP_HOST="${MISTER_HOST:?MISTER_HOST not set (mister.env)}"
+SFTP_USER="${MISTER_USER:-root}"
+SFTP_PASS="${MISTER_PASSWORD:?MISTER_PASSWORD not set (mister.env)}"
 
 REMOTE_DIR="/media/fat/games/mame"
 

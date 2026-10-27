@@ -28,10 +28,6 @@
 //   [315:300] non-zero road pens written in the last frame (0 = the ROM gives nothing)
 //   [328:316] sprites drawn, last frame
 //
-// Removed once they had answered their question rather than carried: the reset
-// counts and lengths (c524b91, for whether the board's OSD Reset reaches the
-// core -- it does) and the V70's DIP switch reads (557d2e8, for The Game
-// Paradise's one-frame Japanese logo). 136 bits and their counters.
 // New fields go on the TOP of the bus: the offsets above are in read_issp.tcl.
 // Source bit 0 clears the counts and maxima (the sticky flags clear with the core's reset).
 module issp_video_probe #(

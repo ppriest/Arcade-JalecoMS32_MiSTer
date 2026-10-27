@@ -7,8 +7,8 @@
 // download port -- ioctl_wr pulses with ioctl_addr, paced by ioctl_wait --
 // so the tile decryption, sdram_download's byte pairing and the SDRAM write
 // path are exactly the ones the byte-streamed download uses and
-// sim/sdram_dl_tb checks. The HPS no longer waits on the FPGA for every byte;
-// the FPGA does the waiting instead, at its own rate.
+// sim/sdram_dl_tb checks. The HPS does not wait on the FPGA per byte; the
+// FPGA paces the replay.
 //
 // After Seta's rom_loader.sv (from Fuuki, from Psikyo, the mechanism from
 // srg320/Arcade-PsikyoSH2_MiSTer). The difference is where the bytes go: that

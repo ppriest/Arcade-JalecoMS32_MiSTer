@@ -24,6 +24,12 @@ Quartus Prime 17.0.2 Lite for the DE10-nano.
 
 ## History
 
+* **`Arcade-JalecoMS32_20261027.rbf`**, **`Arcade-JalecoMS32F1_20261027.rbf`**
+  * Mixer and ROZ layer follow MAME PR 16243: shadows and the two brightness banks as the PR has
+    them, and the ROZ layer no longer wraps where the game's registers turn wrapping off (Best Bout
+    Boxing, Mahjong Angel Kiss, The Game Paradise)
+  * F-1 Super Battle: the Communication Mode and Car ID DIPs start at Master and 1, as in MAME
+
 * **`Arcade-JalecoMS32F1_20260926.rbf`** — F-1 Super Battle
   * F-1 Super Battle specific build
   * Based on the recent work of Andrea Bogazzi (@asturu) in MAME
@@ -113,11 +119,11 @@ The mahjong sets support keyboard with MAME's default keys:
 
 Where the logic sits on the Cyclone V, read from the compiled design with `scripts/floorplan.py` (blocks defined in `scripts/floorplan.json`). One cell per LAB, M10K or DSP site, coloured by the block owning most of it, brighter when fuller. The thin columns are M10K and DSP; the empty area at the top right is the HPS; grey is the MiSTer framework. LUT counts are combinational cells, two per ALM.
 
-Revision `MS32`, fitted 26 Sep 2026:
+Revision `MS32`:
 
 ![Floorplan of MS32](docs/floorplan/MS32.png)
 
-Revision `MS32F1`, fitted 26 Sep 2026:
+Revision `MS32F1`:
 
 ![Floorplan of MS32F1](docs/floorplan/MS32F1.png)
 
@@ -153,19 +159,19 @@ Initial release. Much untested.
 
 ### Resource usage
 
-`MS32` at commit `102bffd` (fitter seed 3), on the DE10-nano's Cyclone V 5CSEBA6, speed grade 7;
-clk_sys setup slack +0.615 ns:
+`MS32` as released in `Arcade-JalecoMS32_20261027.rbf`, on the DE10-nano's Cyclone V 5CSEBA6,
+speed grade 7; clk_sys setup slack +0.877 ns:
 
 | resource | used | available |
 | --- | --- | --- |
-| Logic (ALMs) | 35,312 (84%) | 41,910 |
-| Block memory bits | 4,126,329 (73%) | 5,662,720 |
-| RAM blocks | 527 (95%) | 553 |
+| Logic (ALMs) | 35,469 (85%) | 41,910 |
+| Block memory bits | 4,151,961 (73%) | 5,662,720 |
+| RAM blocks | 531 (96%) | 553 |
 | DSP blocks | 58 (52%) | 112 |
 | PLLs | 3 | 6 |
 
-`MS32F1` (F-1 Super Battle) at commit `473cbad`: 39,380 ALMs (94%), 549 of 553 RAM blocks; every
-clock meets timing, the HDMI output registers held in a placement region (`MS32F1.qsf`).
+`MS32F1` (F-1 Super Battle) as released in `Arcade-JalecoMS32F1_20261027.rbf`: 39,272 ALMs (94%),
+549 of 553 RAM blocks; every clock meets timing, the HDMI output registers held in a placement region (`MS32F1.qsf`).
 
 Block count, not bits, is the limit: an M10K holds 1024 words of up to 10 bits (256 of up to 40),
 and each inferred RAM takes whole blocks, so a 48-entry register file costs the same block as a

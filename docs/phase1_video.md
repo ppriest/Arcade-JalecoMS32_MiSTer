@@ -205,8 +205,15 @@ model has passed. The captures on hand and what each exercises:
 | `p47aces-f1800` | ROZ simple mode over most of the screen, 41 sprites | 100% |
 | `gametngk-f3000` | ROT270, ROZ super (per-line) mode, primask 0xfe shadows, non-square zoom (0x25,0x35) | 100% |
 | `gametngk-f6000` | ROT270, 33 sprites at zooms 0x111/0x180/0x199, 0xfe shadows over TX | 100% |
+| `bbbxing-f1800`, `akiss-f1800` | ROZ without wrap (`0x40` = 0xffff, `0x50` = 0), nothing outside the map | 100% |
+| `akiss-f3000` | ROZ without wrap, 700 pixels outside the map left transparent | 100% |
+| `desertwr-f1800` | ROT270, ROZ wrapping by `0x50` != 0 | 100% |
+| `f1superb-road2` | road and ROZ line planes, line depth (`sim/f1mix_tb`) | 100% |
 
-Not yet exercised by any capture: BG in 256×16 mode, a brightness register other than zero (every
-frame so far has `0x100 - 0` = full), primask cases 0x00/0xf8/0xcc, and the driver's own flip bit.
+The table's captures were retaken with MAME PR 16243 at `2467918640b`; every one passes the model,
+`sim/layers_tb` against the model, and `sim/video_tb` (or `sim/f1mix_tb`) against `reference.png`.
+
+Not yet exercised by any capture: BG in 256×16 mode outside f1superb, primask cases 0x00/0xf8/0xcc,
+and the driver's own flip bit.
 A capture of a ROT270 set needs the snapshot turned back 180° (LESSONS_LEARNED, "[MS32] MAME's
 native snapshot of a ROT270 set"); `render_model.py` does that from the orientation in `_info.txt`.

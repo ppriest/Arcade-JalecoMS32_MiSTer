@@ -19,9 +19,7 @@
 // the one filled during line L, which holds line L+1, and the fetch side
 // starts on line L+2 into the other bank: a full line time (6,144 clk at
 // the default CRTC) for 41 (TX) or 21 (BG) tile fetches, against the ~1,000
-// that hblank alone would give. The Psikyo engine's per-tile prefetch ring
-// is the same idea with a harder wrap; the line buffer costs one M10K and
-// has no wrap.
+// that hblank alone would give. The line buffer costs one M10K.
 //
 // The display side reads buf[hcnt] continuously; the dpram's one-cycle
 // read means pen/colour for dot hcnt are valid from the second clk after
@@ -30,8 +28,7 @@
 //
 // Tile ROM port: req/valid, 8-byte granules, byte i of the granule at
 // rom_data[8*i +: 8] -- the same order the bytes have in the ROM, which the
-// SDRAM backend must deliver (Psikyo needed gfxrom_byte_reorder for exactly
-// this; stating the contract here puts the burden on the backend, once).
+// SDRAM backend must deliver.
 // rom_req is held until rom_valid and drops COMBINATIONALLY on it --
 // LESSONS_LEARNED (Psikyo): a registered clear leaves req high for the
 // cycle the phy is back in IDLE, which launches a duplicate transaction and

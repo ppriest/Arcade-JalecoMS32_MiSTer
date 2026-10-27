@@ -190,8 +190,8 @@ def render_sprites(c):
     buffer 31 after the first opaque draw, so LATER sprites never overwrite
     an already-drawn pixel: the FIRST sprite drawn at a pixel wins. Reverse
     iteration therefore puts the HIGHEST index on top. The loop alone reads
-    as the opposite, and the tetrisp title logo, where adjacent letters
-    overlap, was 182 pixels wrong until the second half was read."""
+    as the opposite; the tetrisp title logo, whose letters overlap, checks
+    it."""
     ram = c.sprram
     tail = len(ram) - 8
     reverse = (int(c.spr_ctrl[0x10 // 4]) & 0x8000) == 0
@@ -301,8 +301,10 @@ def s17(v):  # 17-bit, for the increments
 
 
 def render_roz(c):
-    """draw_roz(): 128x128 map of 16x16 tiles, colour base 0x2000, wrap always
-    on (as MAME has it). "Simple" mode is one affine transform for the frame;
+    """draw_roz(): 128x128 map of 16x16 tiles, colour base 0x2000. It wraps
+    when register 0x40 is 0 or register 0x50 is not; otherwise a source
+    position outside the 2048x2048 map is transparent, tested on the 32-bit
+    16.16 values as draw_roz_core does. "Simple" mode is one affine transform for the frame;
     "super" mode adds per-line start and x-increments from lineram. The
     driver passes start<<16 and inc<<8, so with the register's 8.8 increments
     everything is 16.16 fixed point and the source pixel is the value >> 16."""
@@ -333,13 +335,17 @@ def render_roz(c):
     else:
         cx = ((startx + offsx) << 16) + xs * (incxx << 8) + ys * (incyx << 8)
         cy = ((starty + offsy) << 16) + xs * (incxy << 8) + ys * (incyy << 8)
+    cx = cx & 0xFFFFFFFF
+    cy = cy & 0xFFFFFFFF
+    wrap = (reg(0x40) & 0xFFFF) == 0 or (reg(0x50) & 0xFFFF) != 0
+    inside = np.ones(cx.shape, bool) if wrap else (cx < 2048 << 16) & (cy < 2048 << 16)
     px = (cx >> 16) & 2047
     py = (cy >> 16) & 2047
     ti = (py // 16) * 128 + (px // 16)
     tileno = c.rozram[2 * ti].astype(np.int64)
     colour = c.rozram[2 * ti + 1].astype(np.int64) & 0xF
     off = tileno * 256 + (py % 16) * 16 + (px % 16)
-    pen = c.roztiles[off % len(c.roztiles)].astype(np.int64)
+    pen = np.where(inside, c.roztiles[off % len(c.roztiles)].astype(np.int64), 0)
     return 0x2000 + colour * 256 + pen, pen != 0
 
 
@@ -414,23 +420,37 @@ def pri_index(spr_op, pri, tx_op, roz_op, road_op, bg_op, depth):
 
 def select_pen(code, layers):
     """code bits 5-3 pick the layer (0 sprite, 1 BG, 2 ROZ, 4 road, 6 text,
-    else nothing), bit 6 the backdrop; a transparent pick is pen 0."""
+    else nothing), bit 6 the backdrop; a transparent pick is pen 0. Code 0x00
+    (priority RAM not yet written) is the backdrop too."""
     sel = (code >> 3) & 7
     pen = np.zeros(code.shape, np.int64)
     for k, (idx, op) in layers.items():
         pen = np.where((sel == k) & op, idx, pen)
-    return np.where((code >> 6) & 1, 0, pen)
+    return np.where(((code >> 6) & 1) | (code == 0), 0, pen)
 
 
 def scale(rgb, m, where):
     return np.where(where[:, :, None], rgb * m // 0x100, rgb)
 
 
+def pixel_effects(c, rgb, code, spr_op):
+    """ms32_state::apply_pixel_effects() (PR 16243), both mixers: bits 1-0 = 2
+    is brightness bank 1, bit 0 set bank 0, else none. Then bit 2 clear halves
+    the pixel where a sprite is opaque, the pick is not the sprite, and bit 6
+    (backdrop) is clear. Code 0x00 takes no effect by construction."""
+    layer = (code >> 3) & 7
+    lo = code & 3
+    rgb = scale(rgb, c.brightness(1), lo == 2)
+    rgb = scale(rgb, c.brightness(0), (code & 1) == 1)
+    shadow = (((code >> 2) & 1) == 0) & (((code >> 6) & 1) == 0) & spr_op & (layer != 0)
+    return np.where(shadow[:, :, None], rgb >> 1, rgb)
+
+
 def sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op):
     """ms32_state::apply_sprite_effects() (PR 16243), run after either mixer:
     where a sprite's box covers a pixel but no sprite pen is opaque there, the
-    lookup is redone as if a sprite were opaque, and a clear bit 2 glows a
-    sprite pick (bank 1 first when bits 1-0 are 2) or halves anything else.
+    lookup is redone as if a sprite were opaque, and a clear bit 2 halves the
+    pixel, after brightness bank 1 when bits 1-0 are 2.
     The pass writes (1 + pri) << 8 with pri = attr & 0xf0, so its recovered
     priority ((cov >> 8) - 1) & 0xf is always 0: the index's sprite nibble is
     0 whatever the covering sprite's priority. Road bit forced transparent and
@@ -438,21 +458,16 @@ def sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op):
     m = c.spr_cov & ~spr_op
     code = pri8[pri_index(np.ones_like(spr_op), 0, tx_op, roz_op, np.zeros_like(spr_op), bg_op, 0)]
     fx = m & (((code >> 2) & 1) == 0)
-    spr_pick = ((code >> 3) & 7) == 0
-    g = fx & spr_pick
-    rgb = scale(rgb, c.brightness(1), g & ((code & 3) == 2))
-    rgb = np.where(g[:, :, None], (rgb + 255) >> 1, rgb)          # alpha_blend_r32(c, white, 128)
-    rgb = np.where((fx & ~spr_pick)[:, :, None], rgb >> 1, rgb)
+    rgb = scale(rgb, c.brightness(1), fx & ((code & 3) == 2))
+    rgb = np.where(fx[:, :, None], rgb >> 1, rgb)
     c.n_effect_pixels = int(fx.sum())
     return rgb
 
 
 def mix_f1(c):
     """ms32_f1superbattle_state::mix_layers(): every pixel is a 13-bit index
-    into the priority RAM, whose byte says which layer shows and whether it is
-    halved (bit 2 clear, every layer). No brightness: since PR 16243
-    update_color() applies none and this mixer does not either. Then
-    apply_sprite_effects()."""
+    into the priority RAM, whose byte says which layer shows; then
+    pixel_effects() and apply_sprite_effects()."""
     pal = c.palette()
     pri8 = priram_bytes(c)
 
@@ -474,17 +489,15 @@ def mix_f1(c):
                             4: (road_idx, road_op), 6: (tx_idx, tx_op)})
 
     rgb = pal[pen & 0x7FFF].astype(np.int64)
-    rgb = np.where((((code >> 2) & 1) == 0)[:, :, None], rgb >> 1, rgb)
+    rgb = pixel_effects(c, rgb, code, spr_op)
     rgb = sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op)
     return rgb.astype(np.uint8)
 
 
 def mix(c):
     """ms32_state::mix_layers() (PR 16243): the same per-pixel priority-RAM
-    lookup as mix_f1, with the road transparent and depth 0. Then brightness
-    by code bits 1-0: 3 is bank 0; 0 is bank 1 except for text; 2 is bank 1
-    for a sprite pick. Bit 2 clear glows a sprite pick and halves the rest.
-    Then apply_sprite_effects()."""
+    lookup as mix_f1, with the road transparent and depth 0; then
+    pixel_effects() and apply_sprite_effects()."""
     pal = c.palette()
     pri8 = priram_bytes(c)
     tx_idx, tx_op = render_tx(c)
@@ -495,17 +508,11 @@ def mix(c):
     pri = np.where(spr_op, spr_pri >> 4, 0)
     none = np.zeros_like(spr_op)
     code = pri8[pri_index(spr_op, pri, tx_op, roz_op, none, bg_op, 0)]
-    layer = (code >> 3) & 7
     pen = select_pen(code, {0: (spr & 0x0FFF, spr_op), 1: (bg_idx, bg_op), 2: (roz_idx, roz_op),
                             6: (tx_idx, tx_op)})
 
     rgb = pal[pen & 0x7FFF].astype(np.int64)
-    lo = code & 3
-    rgb = scale(rgb, c.brightness(0), lo == 3)
-    rgb = scale(rgb, c.brightness(1), ((lo == 0) & (layer != 6)) | ((lo == 2) & (layer == 0)))
-    fx = ((code >> 2) & 1) == 0
-    rgb = np.where((fx & (layer == 0))[:, :, None], (rgb + 255) >> 1, rgb)
-    rgb = np.where((fx & (layer != 0))[:, :, None], rgb >> 1, rgb)
+    rgb = pixel_effects(c, rgb, code, spr_op)
     rgb = sprite_effects(c, rgb, pri8, spr_op, tx_op, roz_op, bg_op)
     return rgb.astype(np.uint8)
 

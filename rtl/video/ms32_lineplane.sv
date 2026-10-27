@@ -23,8 +23,7 @@
 //
 // WRAP: the road plane wraps (px and py simply truncate); the ROZ plane does
 // not, and a pixel whose coordinate leaves the map is transparent. The
-// accumulators are 35 bits so that test can be made -- ms32_roz gets away with
-// 27 because it always wraps.
+// accumulators are 35 bits so that test can be made.
 //
 // TWO PARTS WITH A QUEUE BETWEEN THEM. The generator walks x, reads the map for
 // each pixel and pushes what that pixel needs -- granule, which byte of it, the

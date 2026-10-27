@@ -1,19 +1,8 @@
 # Working practice
 
-The build, deploy, instrumentation and reference-capture practices this core adopts, carried over
-from `Arcade-Psikyo_MiSTer`, `Arcade-Fuuki_MiSTer` and `Arcade-Seta_MiSTer`. **These are not
-suggestions.** Each one exists because its absence cost one of those projects real time, and
-[`LESSONS_LEARNED.md`](LESSONS_LEARNED.md) records what it cost. The single clearest example: Fuuki
-looked at Psikyo's `build_staged.py`, judged it optional, and left it unported — the bill was a
-whole session of serialised work, a build that died mid-Fitter with an edit in flight, and a `.qsf`
-hand-edit silently reverted by Quartus re-saving the project between builds.
-
-This core has a larger unknown than any of the three before it — a CPU nobody has implemented in
-RTL, described in [`ROADMAP.md`](ROADMAP.md) — which makes the instrumentation earlier, not later.
-A CPU that is wrong in one addressing mode is invisible from the outside; the MAME trace diff in
-section 8 is how that is caught, and it wants to exist before the first game is launched.
-
-Adopt the whole set at the start, not the parts that seem needed yet.
+The build, deploy, instrumentation and reference-capture practices this core follows, carried over
+from `Arcade-Psikyo_MiSTer`, `Arcade-Fuuki_MiSTer` and `Arcade-Seta_MiSTer`.
+[`LESSONS_LEARNED.md`](LESSONS_LEARNED.md) records why each exists.
 
 ---
 
@@ -24,7 +13,7 @@ the Quartus flow there. The main tree stays editable for the whole compile, ever
 scratch stays out of the repo root, and the build is exactly HEAD — a dirty tree is refused by
 default. The built commit is recorded in `build/BUILT_COMMIT` beside the log.
 
-Three properties matter and must survive the port:
+Three properties matter:
 
 - **Refuses a dirty tree.** "What was in that build?" has to be answerable.
 - **Gates on negative slack on every clock**, not on the Fitter's opinion. Quartus reports "Fitter
@@ -57,9 +46,6 @@ reported every clock domain positive and broke five games on hardware, the secon
 slack and runs all twenty. A commit alone does not identify a bitstream. When a build regresses
 games whose code paths the diff cannot reach, rebuild the same commit at another seed before
 bisecting the source.
-
-Keep an in-tree `scripts/build.sh` for the one case that needs it — a compile that must see
-uncommitted work — and treat it as the exception.
 
 Do not run Quartus wrapped in `nohup ... &` (it detaches and the run becomes untracked), do not
 switch branches while a Quartus process is reading the tree (it silently kills the run), and
@@ -116,15 +102,14 @@ Rules that come with it:
 
 - **Every debug line carries an `H<n>` prefix** so the whole page hides in release builds, with the
   menumask bit tracking a macro defined only by the instrumented revision. The instrumented build
-  shows the page; the release build hides it and compiles the tracer out.
+  shows the page; the release build hides it and compiles the probes out.
 - **Render-disable switches per layer and for sprites** are the cheapest bisection tool there is:
   forcing layers off in the same bitstream isolates a fault to an engine without a rebuild.
 - **Make the all-zero configuration the correct one.** A fresh or missing `.CFG` is all zeroes, so
   invert any switch whose enabled state is required, and write the OSD option order to match.
-- `scripts/cfg.py` sets bits by **read-modify-write** on `/media/fat/config/<setname>.CFG` (16
-  bytes = the 128-bit status word, little-endian, byte N = `status[8N+7:8N]`). Never hand-write a
-  `.CFG` — the mistake of zeroing every DIP while setting one debug bit was made twice on Psikyo,
-  and it silently enabled Service Mode. The CFG is only read when the core loads.
+- Change `/media/fat/config/<setname>.CFG` (16 bytes = the 128-bit status word, little-endian,
+  byte N = `status[8N+7:8N]`) only by **read-modify-write**: rewriting it zeroes every DIP. The CFG
+  is only read when the core loads.
 - Validate bit assignments with <https://agg23.github.io/mister-config/> rather than reasoning
   about ranges. Collisions are silent; the symptom is an option that simply does not respond.
 - **`status[0]` is Soft Reset.** Never use it for anything else.
@@ -149,71 +134,27 @@ would otherwise be rebuilds. One trap, paid for on Fuuki: `write_source_data -va
 **binary string**, and a decimal one is silently rejected while still printing "source set to N".
 Pass `-value_in_hex`, and read every source back after writing it.
 
-## 5. Counters and the trace ring
+## 5. Reading state out of the board
 
-`rtl/debug/debug_counter.sv` and `rtl/debug/debug_tracer.sv`, both carried over with their design
-rationale in the file headers. The properties are the point:
+- `rtl/debug/issp_video_probe.sv` (and `issp_probe.sv` in `MS32_stp`): counters and sticky flags
+  for the video engines, the memory path and the F-1 planes, read with `scripts/read_issp.py`.
+  Counters saturate rather than wrap, and a "bad event" counter is paired with a total, so a zero
+  can be told from "never allowed to count".
+- `scripts/dump_ram.py`: a video RAM region off the running board over JTAG.
+- `scripts/mister_screenshot.py` + `scripts/hw_compare.py`: the framework's screenshot, sampled
+  back to source pixels and diffed against the model. `/dev/fb0` is the ARM-side OSD surface, not
+  the core's video; never use it as evidence.
+- A solid-colour `VGA_R/G/B` override gated by an internal signal answers a yes/no question with
+  one screenshot.
 
-- **No reset port at all.** Quartus powers registers to zero at configuration, so a counter with no
-  reset shows what genuinely happened since the FPGA was programmed. Two Psikyo measurements read
-  `0x000000` and were reported as findings before anyone noticed the counters were cleared by the
-  reset under investigation — which MiSTer asserts for the entire ROM download.
-- **Counters saturate rather than wrap.** A wrapped 3 could mean "three times" or "65,539 times",
-  and those lead to opposite conclusions.
-- **Every "bad event" counter is paired with a "total events" counter.** A zero otherwise cannot
-  distinguish "did not happen" from "was never allowed to count".
-- The tracer takes an explicit one-cycle `cap_stb` from the caller, so the capture point is a
-  deliberate decision — and it must be proven in simulation against a known-good run before its
-  hardware output is trusted. If a new probe reports a fault on a known-good setup, the probe is
-  the fault.
-- **`ctl_window` walks the capture across a long boot sequence from the OSD with no rebuild.** Make
-  the step size odd (`window * 8191`) so it cannot alias with a power-of-two period; a
-  `window * 256` step once returned byte-identical captures for three different windows, equally
-  consistent with a CPU resetting every 256 reads and a read path aliasing every 256 words.
-- **Capture the full address.** Packing only `addr[7:0]` into a pixel made a genuine linear ROM
-  sweep look exactly like a read path dropping its high bits.
+Every JTAG tool takes the machine-wide lock in `scripts/hwlock.py`: JTAG concurrent with Quartus or
+ModelSim can crash the host.
 
-## 6. Reading the trace out through the video output
+## 6. Boot traces
 
-The trace ring is read back as pixels on the screen and decoded from a screenshot
-(`scripts/decode_debug_screenshot.py`, `scripts/tracer_readout.py`). Two things must be right:
-
-- **Force the gamma LUT off under the overlay.** The framework applies the user's gamma curve to
-  the core's RGB before the scaler and before screenshots. Fuuki's trace values came back remapped
-  (`0x40 → 0x38`, `0x02 → 0x01`), which read exactly like SDRAM data-lane corruption and survived
-  an `SDRAM_CLK` phase change. Clear `gamma_bus[19]` whenever the overlay is on, leaving the user's
-  display settings alone.
-- **Draw each value and its bitwise inverse in alternating bands.** The pair must XOR to
-  `0xFFFFFF` whatever the memory holds, so any transform anywhere in the capture path is *detected*
-  rather than read as data.
-
-`/dev/fb0` is the ARM-side OSD overlay surface, not the FPGA's composited video — never use it as
-evidence about the core's video pipeline. Use the screenshot API, and poll for a new file under
-`/media/fat/screenshots/<core-shortname>/` because `POST /api/screenshots` returns an effectively
-empty body regardless of success.
-
-VGA-colour-override builds remain the crudest and most reliable instrument for a yes/no question:
-override `VGA_R/G/B` with a solid colour gated by an internal signal and take one screenshot.
-
-## 7. Reading memory back out of a running core
-
-`scripts/memdump.py` reads SDRAM, VRAM, palette, sprite RAM, video registers and work RAM back out
-of the running core over JTAG with the CPU paused, optionally diffing against an expected image.
-`scripts/boot_trace.py` captures the first N CPU accesses, or the N before the first exception, or
-the N before a JTAG pause, and compares against MAME.
-
-This is the instrument that settled several Fuuki bugs simulation could not see — work RAM indexed
-one bit too narrowly, an arbiter still packing 25-bit addresses after a widening. Build it early;
-its value is that it answers hardware questions directly instead of arguing from simulation.
-
-`scripts/wait_scene.py` polls screenshots until the frame matches a reference crop and then holds
-the CPU paused there, so a dump is one instant of one chosen scene rather than whatever happened to
-be on screen.
-
-`scripts/sweep.py` launches every deployed set in turn and tabulates the probe side by side —
-one black screen is consistent with several different faults, and comparing sets separates them.
-`scripts/soak.py` runs a game for N seconds sampling the probe and a screenshot periodically, and
-flags a hang.
+`scripts/mame_boot_trace.py` records the first N main-CPU bus accesses of a boot from MAME;
+`scripts/compare_boot_trace.py` diffs the core's boot against it access by access.
+`scripts/mame_sound_trace.py` and `compare_sound_trace.py` do the same for the sound interface.
 
 ## 8. MAME as a reference generator
 
@@ -306,12 +247,10 @@ before writing a new bench rather than after one gives a confident wrong answer.
 
 Generate every `.mra` from a script (`scripts/build_mra.py`), not by hand:
 
-- Each region is built from the driver's `ROM_START` semantics, and **the map digits are found by
-  testing against that**, not derived by reasoning. Every interleave Psikyo derived by reasoning
-  was wrong.
-- The finished file is **re-read and compared byte-for-byte** against an image built directly from
-  the driver's `ROM_START` (`scripts/mra.py` reimplements what mra-tools-c does).
-- SDRAM offsets come from the RTL's own address map, never duplicated into the generator.
+- Each region follows the driver's `ROM_START` macros (`scripts/extract_romstart.py` reads them
+  from `ms32.cpp`); `scripts/build_stream.py` builds the image an `.mra` streams, as one file, for
+  the download benches.
+- The SDRAM bases are checked against `ms32_sdram_top.sv` on every run.
 - Parents land in `releases/`, clones in `releases/_alternatives/`.
 - Every `.mra` is gated on an **XML well-formedness check** before deploy. A stray `<` inside a
   prematurely-closed comment once gave a black screen whose every symptom pointed at the RTL, with
@@ -406,30 +345,21 @@ release checklist are in [`../THIRD-PARTY.md`](../THIRD-PARTY.md). Three rules w
   Build-time behaviour changes go in the `.qsf` as `VERILOG_MACRO` settings, which is a project
   decision rather than a modification of `sys/`.
 
-## Script inventory to port
+## Scripts
 
-From `E:\Arcade-Seta_MiSTer\scripts\` (the most evolved set), falling back to
-`D:\Arcade-Fuuki_MiSTer\scripts\` and `E:\Arcade-Psikyo_MiSTer\scripts\`:
-
-| script | why |
+| script | does |
 |---|---|
-| `build_staged.py` | worktree build at `build/`, refuses dirty tree, gates on slack |
-| `deploy.py` | slack-gated deploy, incrementing `.rbf` numbering, fallbacks on device |
-| `run_sim.sh` | one testbench, fresh `work` library every run |
-| `cfg.py` | read-modify-write of the per-core `.CFG` status word |
-| `read_issp.tcl` | read the probe / write the source bus over JTAG |
-| `report_worst_paths.tcl`, `sta_failing_paths.tcl` | worst setup paths from the compiled database |
-| `mame_capture.py` + `mame/*.lua` | headless MAME reference capture |
-| `parse_mame_trace.py`, `boot_trace.py` | MAME boot trace → expected fetch list, and the on-hardware counterpart |
-| `build_mra.py`, `mra.py`, `validate_mra.py` | generate, verify byte-for-byte, and well-formedness-check every `.mra` |
-| `decode_gfx.py`, `gfx_sheet.py` | decode tiles straight from the ROM zip |
-| `memdump.py` | read any CPU-visible memory out of a running core |
-| `decode_debug_screenshot.py`, `tracer_readout.py` | trace ring readout through the video path |
-| `hw.py`, `wait_scene.py`, `sweep.py`, `soak.py` | launch, hold a chosen scene, compare sets, detect hangs |
-| `sdram_pattern_test.py`, `sdram_dump_check.py` | known-pattern SDRAM test through the real download path |
-
-And from `rtl/debug/`: `issp_probe.sv`, `debug_tracer.sv`, `debug_counter.sv`, plus
-`pause_control.sv`.
-
-Port them with their header comments intact. The rationale in those headers is the reason they have
-the shape they do, and a stripped copy invites someone to add the reset port back.
+| `build_staged.py` | Quartus build of HEAD in the `build/` worktree, gated on slack |
+| `deploy.py` | copy the built core, `.mra` files and capture blobs to the MiSTer |
+| `build_mra.py`, `validate_mra.py`, `check_release_mras.py` | generate, validate and gate the `.mra` files |
+| `build_rom_image.py`, `build_stream.py`, `extract_romstart.py`, `extract_dips.py` | ROM regions, the streamed image, and the driver's `ROM_START` / DIPs |
+| `gen_jalcrpt.py` | the tile-ROM decryption package |
+| `mame_capture.py`, `render_model.py` | MAME reference frames and the software video model |
+| `sim_layer_check.py`, `compare_sim_layer.py`, `compare_sim_rgb.py` | video benches against the model and `reference.png` |
+| `run_sim.sh`, `run_verilator.py`, `run_v60_tests.sh`, `run_v60_verilator.sh` | ModelSim and Verilator benches, the V60 unit suite |
+| `mame_boot_trace.py`, `compare_boot_trace.py`, `mame_sound_trace.py`, `compare_sound_trace.py`, `compare_ymf_audio.py` | CPU, sound and YMF271 against MAME |
+| `build_capture_blob.py`, `build_capture_mra.py` | a capture as a blob the board loads |
+| `mister_launch.py`, `mister_screenshot.py`, `hw_compare.py` | launch on the board and compare the screen |
+| `read_issp.py`, `dump_ram.py`, `hwlock.py` | JTAG readout under the machine-wide lock |
+| `floorplan.py` | the floorplan images in the README |
+| `coretools.py` | settings shared by the scripts (`mister.env`) |

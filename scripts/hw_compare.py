@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compare a board screenshot of a capture against the model rendered the same way.
 
-    python scripts/hw_compare.py tetrisp-title debug/hw/tetrisp-title-stubrom.png --stub-rom
+    python scripts/hw_compare.py tetrisp-title debug/hw/tetrisp-title.png
 
---stub-rom renders the model with MS32.sv's ROM stub in place of the tile
-and sprite ROMs (pen = addr[7:0] ^ addr[15:8] ^ addr[23:16]), which is what
-the board shows until the SDRAM backend exists. The screenshot is the
-framework's scaled output, so it is sampled back at each source pixel's
+The screenshot is the framework's scaled output, so it is sampled back at each source pixel's
 centre; a pixel counts as matching when every channel is within --tol.
 Writes hw_model.png, hw_sampled.png and hw_diff.png beside the capture.
 """
@@ -25,28 +22,15 @@ import render_model as rm  # noqa: E402
 W, H = 320, 224
 
 
-def stub(n):
-    # MS32.sv's ROM_STUB replicates one byte across the 8-byte granule, from
-    # the granule address (low three bits zero)
-    i = np.arange(n, dtype=np.int64) & ~7
-    return ((i & 0xFF) ^ ((i >> 8) & 0xFF) ^ ((i >> 16) & 0xFF)).astype(np.uint8)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("capture")
     ap.add_argument("screenshot")
-    ap.add_argument("--stub-rom", action="store_true")
     ap.add_argument("--tol", type=int, default=8)
     ap.add_argument("--layer-colours", action="store_true", help="the palette build_capture_blob.py --layer-colours used")
     a = ap.parse_args()
     game = a.capture.split("-")[0]
     c = rm.Capture(a.capture, game)
-    if a.stub_rom:
-        c.txtiles = stub(1 << 24)
-        c.bgtiles = stub(1 << 24)
-        c.roztiles = stub(1 << 24)
-        c.sprite = stub(1 << 24)
     if a.layer_colours:
         sys.path.insert(0, str(REPO / "scripts"))
         from build_capture_blob import layer_palette

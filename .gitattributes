@@ -1,11 +1,6 @@
-# Shell scripts MUST keep LF endings, whatever core.autocrlf says.
-#
-# This is not a tidiness preference. With CRLF, `set -euo pipefail` becomes
-# `set -euo pipefail\r` and bash rejects it as "invalid option name", so the
-# script dies on line 1. It bit here after a `git reset --hard`, which rewrote
-# the working tree through autocrlf: scripts/run_sim.sh still ran under the
-# MSYS bash on PATH but failed under the Git bash a Python subprocess picked,
-# so the same script passed interactively and failed from a wrapper.
+# Shell scripts MUST keep LF endings, whatever core.autocrlf says: with CRLF,
+# `set -euo pipefail` becomes `set -euo pipefail\r`, which bash rejects, and
+# the script dies on line 1.
 *.sh text eol=lf
 
 # Same reasoning for anything else with a shebang or a strict parser -- but
@@ -18,3 +13,4 @@ scripts/**/*.lua text eol=lf
 
 # Verilog/VHDL and docs are read by tools that do not care; leave them to
 # core.autocrlf so Windows editors behave normally.
+scripts/hooks/* text eol=lf

@@ -17,24 +17,23 @@
 //
 // and the byte there says what to show: bits 5-3 the layer (0 sprite, 1 BG,
 // 2 ROZ, 4 road, 6 text, anything else nothing), bit 6 the backdrop instead.
+// A byte of 0x00 (priority RAM not yet written) is the backdrop.
 //
-//   F1=0: bits 1-0 pick the brightness bank -- 3 bank 0, 0 bank 1 unless the
-//         layer is text, 2 bank 1 for a sprite, else none -- and bit 2 clear
-//         glows a sprite (halfway to white) and halves anything else.
-//   F1=1: no brightness (MAME's f1superb mixer applies none), and bit 2 clear
-//         halves every layer.
+// Then apply_pixel_effects(), the same for both boards: bits 1-0 = 2 is
+// brightness bank 1, bit 0 set bank 0, else none; bit 2 clear halves the
+// pixel where a sprite pen is opaque, the pick is not the sprite and bit 6 is
+// clear.
 //
 // Not here: MAME's apply_sprite_effects() second pass, which redoes the
 // lookup where a sprite's box covers a pixel but no pen of it is opaque. It
 // needs box coverage from the sprite engine, which the frame buffer does not
-// carry, and changed no pixel in any capture (render_model.py prints the
-// count).
+// carry (render_model.py prints the count of pixels it changes).
 //
 // The index is formed and read every dot, so a change the game makes to the
 // priority RAM takes effect immediately, as MAME reads it per pixel.
 //
 // Pipeline: index (0) -> priority RAM read (1) -> select and palette read (2)
-// -> palette words (2b) -> brightness (3) -> glow/half (4). Six clocks,
+// -> palette words (2b) -> brightness (3) -> half (4). Six clocks,
 // inside the shortest dot period of 12.
 module ms32_mixer #(
 	parameter bit F1 = 1'b0
@@ -92,15 +91,13 @@ module ms32_mixer #(
 
 	// ------------------------------------- stage 1: what the priority RAM says
 	logic [14:0] s2_idx;
-	logic        s2_fx, s2_spr, s2_bank0, s2_bank1;
+	logic        s2_fx, s2_bank0, s2_bank1;
 	wire  [2:0]  layer = pri_data[5:3];
 	always_ff @(posedge clk) begin
-		s2_fx    <= !pri_data[2];
-		s2_spr   <= !F1 && layer == 3'd0;              // bit 2 clear glows, not halves
-		s2_bank0 <= !F1 && pri_data[1:0] == 2'd3;
-		s2_bank1 <= !F1 && ((pri_data[1:0] == 2'd0 && layer != 3'd6) ||
-		                    (pri_data[1:0] == 2'd2 && layer == 3'd0));
-		if (pri_data[6]) begin
+		s2_fx    <= !pri_data[2] && !pri_data[6] && s1_spr_o && layer != 3'd0;
+		s2_bank0 <= pri_data[0];
+		s2_bank1 <= pri_data[1:0] == 2'd2;
+		if (pri_data[6] || pri_data == 8'd0) begin
 			s2_idx <= 15'd0;                            // backdrop
 		end else begin
 			unique case (layer)
@@ -116,21 +113,21 @@ module ms32_mixer #(
 
 	// ------------------------------------------------ stage 2: palette read
 	assign pal_addr = s2_idx;
-	logic s3_fx, s3_spr, s3_bank0, s3_bank1;
+	logic s3_fx, s3_bank0, s3_bank1;
 	always_ff @(posedge clk) begin
-		s3_fx <= s2_fx; s3_spr <= s2_spr; s3_bank0 <= s2_bank0; s3_bank1 <= s2_bank1;
+		s3_fx <= s2_fx; s3_bank0 <= s2_bank0; s3_bank1 <= s2_bank1;
 	end
 
 	// ----------------------------------- stage 2b: the palette words, registered
-	// (the RAM's output straight into the products was the worst clk_sys path
-	// in three fitted builds, 0cf1b86)
+	// (the RAM's output straight into the products is otherwise the worst
+	// clk_sys path)
 	logic [15:0] pw0, pw1;
-	logic        s3b_fx, s3b_spr;
+	logic        s3b_fx;
 	logic [8:0]  m_r, m_g, m_b;                         // the bank's factors, 0x100 = none
 	always_ff @(posedge clk) begin
 		pw0 <= pal_w0;
 		pw1 <= pal_w1;
-		s3b_fx <= s3_fx; s3b_spr <= s3_spr;
+		s3b_fx <= s3_fx;
 		m_r <= s3_bank0 ? 9'h100 - {1'b0, brt0[15:8]} : s3_bank1 ? 9'h100 - {1'b0, brt2[15:8]} : 9'h100;
 		m_g <= s3_bank0 ? 9'h100 - {1'b0, brt0[7:0]}  : s3_bank1 ? 9'h100 - {1'b0, brt2[7:0]}  : 9'h100;
 		m_b <= s3_bank0 ? 9'h100 - {1'b0, brt1[7:0]}  : s3_bank1 ? 9'h100 - {1'b0, brt3[7:0]}  : 9'h100;
@@ -139,29 +136,22 @@ module ms32_mixer #(
 	// ------------------------------------------------- stage 3: brightness
 	// Three 8x9 products at pixel rate: the one place in the video path that
 	// keeps a multiplier (WORKFLOW "No multiplies, no divides" names this
-	// exception). F1 never sets a bank, so its factors are constant 0x100 and
-	// the products fold away.
+	// exception).
 	wire [16:0] pr = {9'd0, pw0[15:8]} * m_r;
 	wire [16:0] pg = {9'd0, pw0[7:0]}  * m_g;
 	wire [16:0] pb = {9'd0, pw1[7:0]}  * m_b;
 	logic [7:0] r3, g3, b3;
-	logic       s4_fx, s4_spr;
+	logic       s4_fx;
 	always_ff @(posedge clk) begin
 		r3 <= pr[15:8]; g3 <= pg[15:8]; b3 <= pb[15:8];
-		s4_fx <= s3b_fx; s4_spr <= s3b_spr;
+		s4_fx <= s3b_fx;
 	end
 
-	// stage 4: bit 2 clear. A sprite glows, alpha_blend_r32(c, white, 128)
-	// = (c + 255) >> 1; anything else halves.
-	function automatic logic [7:0] fx(input logic [7:0] c, input logic on, input logic glow);
-		logic [8:0] sum;
-		sum = {1'b0, c} + 9'd255;
-		fx = !on ? c : glow ? sum[8:1] : {1'b0, c[7:1]};
-	endfunction
+	// stage 4: the shadow halves
 	always_ff @(posedge clk) begin
-		r <= fx(r3, s4_fx, s4_spr);
-		g <= fx(g3, s4_fx, s4_spr);
-		b <= fx(b3, s4_fx, s4_spr);
+		r <= s4_fx ? {1'b0, r3[7:1]} : r3;
+		g <= s4_fx ? {1'b0, g3[7:1]} : g3;
+		b <= s4_fx ? {1'b0, b3[7:1]} : b3;
 	end
 
 endmodule

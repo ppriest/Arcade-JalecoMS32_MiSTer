@@ -8,8 +8,8 @@
 
 Every region the video hardware renders from is dumped through the CPU's
 program space at the chosen frame, and the screenshot MAME rendered from that
-same state is saved beside them. Phase 1's benches preload the dumps, render
-one frame, and compare against reference.png.
+same state is saved beside them. sim/layers_tb, sim/video_tb and sim/f1mix_tb
+preload the dumps, render one frame, and compare against reference.png.
 
 Region map: transcribed from ms32_map in jaleco/ms32.cpp (the 0xFC/0xFD/0xFE
 aliases MAME's own comments name, which the CPU actually uses). Each is the
@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -100,16 +101,23 @@ def main():
         MS32_TAPS=",".join(f"{lo:x}:{hi:x}" for lo, hi in WRITE_TAPS) if a.wlog else "",
         MS32_SCRIPT=(repo / "scripts" / "mame" / "capture.lua").as_posix(),
     )
+    nvdir = tempfile.mkdtemp(prefix="ms32_nvram_")
     cmd = [str(MAME_EXE), a.game, "-skip_gameinfo", "-nodebug", "-nothrottle",
            "-sound", "none", "-video", "none", "-nowindow",
            "-autoboot_delay", "0",
            "-autoboot_script", (repo / "scripts" / "mame" / "run.lua").as_posix(),
            "-snapshot_directory", out.as_posix(),
            "-snapview", "native",
+           # empty NVRAM every run: MAME PR 16243 gives ms32 an NVRAM device, and
+           # MAME_DIR's nvram/ would carry state between captures
+           "-nvram_directory", nvdir,
            "-rompath", rompath(repo),
            "-seconds_to_run", str(max(30, a.frame // 60 + 20))]
     print(" ".join(cmd))
-    r = subprocess.run(cmd, cwd=str(MAME_DIR), env=env, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, cwd=str(MAME_DIR), env=env, capture_output=True, text=True)
+    finally:
+        shutil.rmtree(nvdir, ignore_errors=True)
     for line in (r.stdout or "").splitlines():
         if line.startswith(("CAPTURE", "LUAFAIL")):
             print("  " + line)

@@ -7,8 +7,8 @@
 The blob (scripts/build_capture_blob.py) goes in as <rom index="2"> inline
 hex: MiSTer sends every <rom> element of an .mra at launch with its index,
 and MS32.sv's loader takes ioctl index 2 as a capture (index 1 is the mod byte). Launching the .mra is
-then the whole test -- no OSD file browser, so scripts/mister_hw_test.py can
-launch it through MiSTer Remote and screenshot it unattended.
+then the whole test -- no OSD file browser, so scripts/mister_launch.py and
+scripts/mister_screenshot.py can run it unattended.
 """
 import sys
 from pathlib import Path

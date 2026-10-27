@@ -23,6 +23,8 @@ Checks:
      line (MAME_SRC, from mister.env or the environment): ROT0 ->
      "horizontal", ROT90 -> "vertical (cw)", ROT270 -> "vertical (ccw)".
      Skipped, with a note, when the driver is not available.
+  3'. No <dip> above bit 31 and no fifth default byte: Main_MiSTer's int shift
+     sign-extends byte 3 over bits 32-63 and drops byte 4 (mra_loader.cpp).
   5. Every <dip> fits the OSD: " name:" plus the longest setting within 28
      columns. Main_MiSTer pads the line with a signed-char count
      (menu.cpp, MENU_ARCADE_DIP1), so a line that does not fit wraps and the
@@ -146,6 +148,20 @@ def check(path, rotations, allow_generic_buttons=False, installed=None):
             problems.append(
                 'switches default has %d bytes but a <dip> uses bit %d, which '
                 'is outside the range those bytes can cover' % (nbytes, max(bits)))
+        # Main_MiSTer builds the default with `dip_def |= binary[i] << (i * 8)` on
+        # an int (support/arcade/mra_loader.cpp): byte 3 >= 0x80 sign-extends over
+        # bits 32-63 and a fifth byte is shifted out. A DIP at bit 32+ therefore
+        # gets whatever bit 31 was, not its own default (BallySente's fake Flip
+        # Screen at bit 32 started On in every set).
+        if bits and max(bits) >= 32:
+            problems.append(
+                'a <dip> uses bit %d: Main_MiSTer only applies defaults for bits 0-31 '
+                '(byte 3 sign-extends over 32-63, byte 4+ is dropped); move it below 32'
+                % max(bits))
+        if nbytes > 4:
+            problems.append(
+                'switches default has %d bytes; Main_MiSTer drops every byte after the '
+                'fourth, so bytes 4+ never reach the core' % nbytes)
     mv = (root.findtext('mameversion') or '').strip()
     if not mv:
         problems.append('no <mameversion>: say which MAME the ROM definitions came from '

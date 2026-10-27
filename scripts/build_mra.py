@@ -217,21 +217,20 @@ def switches_xml(game):
     reads 1 (every DIP line is pulled up, all ports IP_ACTIVE_LOW).
 
     f1superb has a second bank as well, DSW2 on the MB-93159 board, read at
-    0xFD0D0000. It goes in the same stream as bytes 4-7, so its switches sit at
-    bit 32 and up and the F1SUPERB build stores eight bytes rather than four."""
+    0xFD0D0000. Its low byte goes in byte 3, which MAME's DSW leaves unused:
+    Main_MiSTer applies defaults only to bits 0-31 (byte 3 sign-extends over
+    32-63, bytes 4+ are dropped), so a bank at bit 32 would start at 1s."""
     blocks = extract_dips.load()
     missing = set()
     ports = extract_dips.parse_ports(blocks[INPUTS[game]], blocks, missing)
     if missing:
         sys.exit(f"{game}: DEF_STR missing from extract_dips: {sorted(missing)}")
-    banks = [("DSW", 0)] + ([("DSW2", 32)] if game == "f1superb" else [])
-    default = (1 << (32 * len(banks))) - 1
+    banks = [("DSW", 0)] + ([("DSW2", 24)] if game == "f1superb" else [])
+    default = 0xFFFFFFFF
     if game == "f1superb":
-        # DSW2 declares only bits 0-3 (DIPs, default 0) and 0xffffff00 (unused,
-        # active low, so 1). MAME reads the undeclared bits 4-7 as 0, and so
-        # 0xFFFFFF00 in all, which is what the core hardwired before this bank
-        # was in the .mra
-        default &= ~(0xF0 << 32)
+        # DSW2 declares bits 0-3 (DIPs, default 0); MAME reads the undeclared
+        # bits 4-7 as 0. Its unused bits 8-31 are the core's constant 1s.
+        default &= ~(0xF0 << 24)
     dips = []
     for port, shift in banks:
         for name, mask, dflt, settings in sorted(ports[port], key=lambda d: (d[1] & -d[1])):   # OSD in bit order
@@ -240,6 +239,8 @@ def switches_xml(game):
                 continue
             bits = [b for b in range(32) if mask & (1 << b)]
             pos = [b + shift for b in bits]
+            if max(pos) > 31:
+                sys.exit(f"{game}: dip {name!r} lands on bit {max(pos)}; Main_MiSTer applies defaults to bits 0-31 only")
             ids = []
             for idx in range(1 << len(bits)):
                 value = sum(1 << bp for j, bp in enumerate(bits) if idx & (1 << j))
@@ -251,7 +252,7 @@ def switches_xml(game):
             # a switch MAME does not know stays in the file, commented out, for
             # anyone who finds out what it does
             dips.append(f"    <!-- MAME: unknown. {line} -->" if name == "Unknown" else f"    {line}")
-    dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4 * len(banks)))
+    dflt_bytes = ",".join(f"{(default >> (8 * i)) & 0xFF:02X}" for i in range(4))
     return [f'  <switches default="{dflt_bytes}" base="0">'] + dips + ["  </switches>"]
 
 

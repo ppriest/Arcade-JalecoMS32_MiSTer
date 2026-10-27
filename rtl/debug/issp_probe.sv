@@ -3,7 +3,7 @@
 // In-System Sources and Probes instrumentation, read over JTAG with
 // scripts/read_issp.py (which holds the machine-wide JTAG marker so no
 // Quartus or ModelSim run overlaps it -- scripts/hwlock.py; that overlap
-// has bugchecked this PC). Built only in the MS32_stp revision
+// can crash the host (bugcheck)). Built only in the MS32_stp revision
 // (DEBUG_ISSP). Ported from the Psikyo core's rtl/debug/issp_probe.sv,
 // where the design is explained: SignalTap is GUI-only in Quartus Prime
 // Lite 17.0, and what distinguishes the causes of "nothing arrives" is a

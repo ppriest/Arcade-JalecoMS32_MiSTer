@@ -5,9 +5,8 @@
     python scripts/mister_launch.py "/media/fat/_Arcade/_Jaleco MegaSystem 32/_dev/Capture tetrisp-title.mra"
 
 Bounces through menu.rbf first: launching an .mra while a core is already
-running does not reprogram the FPGA or resend the ROMs (the Psikyo core's
-LESSONS_LEARNED, "MiSTer caches the loaded ROM"), and a screenshot of a
-stale core looks exactly like evidence. --no-bounce skips that when the
+running does not reprogram the FPGA or resend the ROMs (found on the Psikyo
+core), so a screenshot would show the stale core. --no-bounce skips that when the
 point is to poke a live core. Connection settings come from mister.env.
 """
 import argparse

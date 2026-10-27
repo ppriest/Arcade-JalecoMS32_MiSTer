@@ -32,7 +32,7 @@ done
 [ -d sys ] || { echo "run me from the repository root"; exit 1; }
 [ -d "sim/$TB" ] || { echo "no such testbench: sim/$TB"; exit 1; }
 
-# JTAG concurrent with ModelSim has bugchecked this PC. hwlock.py enforces it.
+# JTAG concurrent with ModelSim can crash the host (bugcheck). hwlock.py enforces it.
 python scripts/hwlock.py --require-no-jtag "simulation $TB"
 
 if command -v powershell.exe >/dev/null 2>&1; then

@@ -45,6 +45,8 @@ reg [31:0] rozctrl  [0:23];
 reg [31:0] txscroll [0:5];
 reg [31:0] bgscroll [0:5];
 reg [31:0] bgmode_r;
+reg [15:0] brt [0:3];          // brightness registers, the write log's last values
+string     tmp_line;
 reg [7:0]  priram  [0:8191];
 reg [15:0] pal0 [0:32767];
 reg [15:0] pal1 [0:32767];
@@ -215,7 +217,7 @@ ms32_mixer #(.F1(1'b1)) u_mix (
 	.roz_line(rz_lcol), .road_line(rd_lcol), .spr(spr_w),
 	.pri_addr(pri_addr), .pri_data(pri_data),
 	.pal_addr(pal_addr), .pal_w0(pal_w0), .pal_w1(pal_w1),
-	.brt0(16'd0), .brt1(16'd0), .brt2(16'd0), .brt3(16'd0),
+	.brt0(brt[0]), .brt1(brt[1]), .brt2(brt[2]), .brt3(brt[3]),
 	.dis_tx(1'b0), .dis_bg(1'b0), .dis_roz(1'b0), .dis_spr(1'b0), .dis_road(1'b0),
 	.r(vr), .g(vg), .b(vb)
 );
@@ -289,6 +291,23 @@ initial begin
 	// bgmode is write-only, so the capture reads it as 0: +BGMODE says what the
 	// write log holds (f1superb sets it, and its BG is the 256x16 layout)
 	if ($value$plusargs("BGMODE=%d", n)) bgmode_r = n[31:0];
+	// brightness registers are write-only too: the last values in the write log
+	begin : brt_log
+		integer wl, fr, ln, ad, mk, dt, pc;
+		for (k = 0; k < 4; k = k + 1) brt[k] = 16'd0;
+		wl = $fopen({"debug/", CAP, "/", GAME, "_writes.log"}, "r");
+		if (wl) begin
+			while (!$feof(wl)) begin
+				if ($fscanf(wl, "%d %d %h %h %h %h\n", fr, ln, ad, mk, dt, pc) == 6) begin
+					if (ad >= 32'hFCE00280 && ad <= 32'hFCE0028C && ad[1:0] == 2'd0) brt[ad[3:2]] = dt[15:0];
+				end else begin
+					void'($fgets(tmp_line, wl));
+				end
+			end
+			$fclose(wl);
+		end
+		$display("%s: brightness %04x %04x %04x %04x", CAP, brt[0], brt[1], brt[2], brt[3]);
+	end
 
 	// the model's sprite words and line colours
 	fd = $fopen({"debug/", CAP, "/model_sprite_words.u16"}, "r");

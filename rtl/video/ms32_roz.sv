@@ -11,16 +11,17 @@
 //   super mode (bit 0 set), per line from line RAM at 8 * (y & 0xff):
 //     cx = (start2x + startx + offsx) << 16  +  x * (lineincxx << 8)
 //     cy = (start2y + starty + offsy) << 16  +  x * (lineincxy << 8)
-//   px = (cx >> 16) & 2047,  py = (cy >> 16) & 2047      (wrap always on)
+//   px = (cx >> 16) & 2047,  py = (cy >> 16) & 2047
+//   without wrap, a pixel whose cx or cy (as u32) is 2048 << 16 or more is
+//   transparent; wrap = roz_ctrl[0x40] == 0 || roz_ctrl[0x50] != 0
 //   ti = (py / 16) * 128 + px / 16;  tile = vram[2 ti];  colour = vram[2 ti + 1] & 0xf
 //   pen = rom[tile * 256 + (py & 15) * 16 + (px & 15)]
 //
 // startx/starty/start2x/start2y are 18-bit two's complement (bit 17 sign),
 // the increments 17-bit; offsx/offsy are the 16-bit registers at 0x30/0x34
 // plus 0x400 when 0x38/0x3c bit 0 is set. All of it is 32-bit wrapping
-// arithmetic in MAME; only bits 26:16 of the accumulators reach the map, and
-// addition modulo 2^27 leaves those bits as MAME's, so the accumulators and
-// every term added into them are 27 bits.
+// arithmetic in MAME, and the accumulators are 32 bits: bits 26:16 address
+// the map and bits 31:27 decide the non-wrap clip.
 //
 // SHAPE: the same one-line-ahead double line buffer as ms32_tilemap. Per
 // pixel: two VRAM reads, then an 8-byte ROM granule (half a tile row) from
@@ -36,11 +37,10 @@
 // other. The set is an XOR hash of the tag (fixed random parities, no
 // arithmetic). A rotated line needs about as many granules as the line
 // before it, and at steep angles the tiles along one line share rows, so a
-// cache indexed by row alone (the 64-entry one this replaces) was refilled
-// on nearly every pixel: 257 misses on a line at 1:1 and 60-75 degrees. A
-// model of this cache on a map of all-different tiles (the sweep in README,
-// "Status") keeps a 1:1 line under 50 misses at any angle but exactly 90
-// degrees, where every eighth line starts a new half of every row. The tile
+// cache indexed by row alone is refilled on nearly every pixel: 257 misses
+// on a line at 1:1 and 60-75 degrees. A model of this cache on a map of
+// all-different tiles (not kept in the repository) keeps a 1:1 line under
+// 50 misses at any angle but exactly 90 degrees, where every eighth line starts a new half of every row. The tile
 // ROM changes only with a download, under reset: reset clears the valid bits
 // (2,048 clocks), and no line starts until the clear is done.
 //
@@ -72,6 +72,7 @@ module ms32_roz (
 	input  logic        offsx_hi,      // roz_ctrl[0x38] bit 0
 	input  logic        offsy_hi,      // roz_ctrl[0x3c] bit 0
 	input  logic        super_mode,    // roz_ctrl[0x5c] bit 0
+	input  logic        wrap,
 
 	// line RAM: u16 index, one-cycle synchronous read
 	output logic [10:0] line_addr,
@@ -102,11 +103,11 @@ module ms32_roz (
 	output logic        dbg_pen_nz       // a non-zero pen written to the line buffer
 );
 
-	function automatic logic [26:0] sx18(input logic [17:0] v);
-		sx18 = {{9{v[17]}}, v};
+	function automatic logic [31:0] sx18(input logic [17:0] v);
+		sx18 = {{14{v[17]}}, v};
 	endfunction
-	function automatic logic [26:0] sx17(input logic [16:0] v);
-		sx17 = {{10{v[16]}}, v};
+	function automatic logic [31:0] sx17(input logic [16:0] v);
+		sx17 = {{15{v[16]}}, v};
 	endfunction
 
 	// ------------------------------------------------------------ line setup
@@ -117,30 +118,31 @@ module ms32_roz (
 	logic [11:0] y;
 	logic [3:0]  lr_cnt;
 	logic [15:0] lr [0:7];
-	logic [26:0] cx, cy, dxx, dxy;
+	logic [31:0] cx, cy, dxx, dxy;
 	// Simple mode's y terms, y*(incyx<<8) and y*(incyy<<8), as accumulators
 	// stepped once per fetched line (WORKFLOW "No multiplies, no divides"):
 	// zero at line 0, +inc per line. Lines are fetched in order once per
 	// frame, so the sum is the product MAME computes for registers held
 	// across the frame -- the only case MAME renders as intended, since
 	// screen_update reads them once.
-	logic [26:0] acc_yx, acc_yy;
-	wire  [26:0] acc_yx_now = (y == 12'd0) ? 27'd0 : acc_yx + (sx17(incyx) << 8);
-	wire  [26:0] acc_yy_now = (y == 12'd0) ? 27'd0 : acc_yy + (sx17(incyy) << 8);
+	logic [31:0] acc_yx, acc_yy;
+	wire  [31:0] acc_yx_now = (y == 12'd0) ? 32'd0 : acc_yx + (sx17(incyx) << 8);
+	wire  [31:0] acc_yy_now = (y == 12'd0) ? 32'd0 : acc_yy + (sx17(incyy) << 8);
 	logic [9:0]  x;
 	logic [15:0] cyc_cnt, miss_cnt;
 
 	// per-line constants, from registers or line RAM
-	wire [26:0] offsx32 = {11'd0, offsx} + (offsx_hi ? 27'h400 : 27'h0);
-	wire [26:0] offsy32 = {11'd0, offsy} + (offsy_hi ? 27'h400 : 27'h0);
-	wire [26:0] st2x = sx18({lr[1][1:0], lr[0]});
-	wire [26:0] st2y = sx18({lr[3][1:0], lr[2]});
-	wire [26:0] lixx = sx17({lr[5][0], lr[4]});
-	wire [26:0] lixy = sx17({lr[7][0], lr[6]});
+	wire [31:0] offsx32 = {16'd0, offsx} + (offsx_hi ? 32'h400 : 32'h0);
+	wire [31:0] offsy32 = {16'd0, offsy} + (offsy_hi ? 32'h400 : 32'h0);
+	wire [31:0] st2x = sx18({lr[1][1:0], lr[0]});
+	wire [31:0] st2y = sx18({lr[3][1:0], lr[2]});
+	wire [31:0] lixx = sx17({lr[5][0], lr[4]});
+	wire [31:0] lixy = sx17({lr[7][0], lr[6]});
 
 	// pixel coordinates from the accumulators
 	wire [10:0] px = cx[26:16];
 	wire [10:0] py = cy[26:16];
+	wire        outside = !wrap && (cx[31:27] != 5'd0 || cy[31:27] != 5'd0);
 	wire [13:0] ti = {py[10:4], px[10:4]};
 	logic [10:0] px_r, py_r;
 	logic [15:0] tileno;
@@ -274,7 +276,22 @@ module ms32_roz (
 						state <= P0;
 					end
 
-					P0: begin
+					P0: if (outside) begin
+						// clipped: transparent, no fetch
+						wr_en  <= !warm;
+						wr_pen <= 8'd0;
+						wr_x   <= x;
+						cx     <= cx + dxx;
+						cy     <= cy + dxy;
+						x      <= x + 10'd1;
+						if (x == hdisplay[9:0] - 10'd1) begin
+							line_busy   <= 1'b0;
+							line_done   <= !warm;
+							line_cycles <= cyc_cnt;
+							line_misses <= miss_cnt;
+							state       <= S_IDLE;
+						end
+					end else begin
 						px_r      <= px;
 						py_r      <= py;
 						vram_addr <= {ti, 1'b0};

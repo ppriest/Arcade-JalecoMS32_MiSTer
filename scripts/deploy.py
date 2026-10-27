@@ -2,19 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Copy the built core, its .mra files and capture blobs to a MiSTer.
 
+    python scripts/deploy.py                                     # core + every .mra in releases/
     python scripts/deploy.py --rbf-only                          # build/output_files/MS32_stp.rbf
     python scripts/deploy.py --rbf-only --capture tetrisp-title  # also debug/tetrisp-title/capture.bin
     python scripts/deploy.py --mra-only      # skip the bitstream
     python scripts/deploy.py --dry-run       # show what would be copied
 
-Ported from the Seta core's scripts/deploy.py (itself from Psikyo's); the
-build guard below is the reason it exists. Capture blobs
-(scripts/build_capture_blob.py) go to REMOTE_CAPTURES for the OSD's
+Ported from the Seta core's scripts/deploy.py (itself from Psikyo's). Capture
+blobs (scripts/build_capture_blob.py) go to REMOTE_CAPTURES for the OSD's
 "Load capture" file browser.
-
-    python scripts/deploy.py                 # core + every .mra in releases/
-    python scripts/deploy.py --mra-only      # skip the bitstream
-    python scripts/deploy.py --dry-run       # show what would be copied
 
 Connection settings come from ./mister.env (gitignored):
 
@@ -25,14 +21,11 @@ Connection settings come from ./mister.env (gitignored):
 Transport is PuTTY's plink/pscp, because Windows has no OpenSSH password-auth
 automation without sshpass and that is not commonly installed there.
 
-WHY THE BUILD GUARD IS HERE
----------------------------
-Ported from the Psikyo core's scripts/deploy_rbf.py, which records the reason:
-a Quartus build died mid-Fitter, Quartus left the PREVIOUS build's .rbf in
-output_files/, the deploy copied that stale bitstream under a new name, and the
-verification screenshot came back healthy -- because it was verifying the
-previous build. A green result against a stale artifact is worse than a red
-one, because it looks like evidence.
+THE BUILD GUARD
+---------------
+A build that dies mid-Fitter leaves the previous build's .rbf in
+output_files/, and deploying that under a new name verifies the wrong
+bitstream.
 
 So two independent checks, either of which alone can be fooled:
   1. the build log contains Quartus's success line;
